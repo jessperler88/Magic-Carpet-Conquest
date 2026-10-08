@@ -222,6 +222,23 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
       thresholds, flood-fill connectivity with carve-or-reroll; `WorldParams` = seed, size, players, symmetry,
       roughness, water, spring density, wild density, lair grade curve, day length, blight on / off; exchanged in
       the lobby like `NetGameRules`. Generation runs with the extended pool.
+      **Trigger areas and teleport portals** (user request 2026-10-08), built on the original's own mechanisms:
+      - *Triggers*: class-11 switch Things (32 types) fire `switch_activate(dis_id)`, which spawns every level
+        record with that `DisId` (ENGINE.md 2.3). The placer scatters switches with a hidden payload group, rolled
+        from a weighted table by distance band: mana balls / a mana shower, a creature ambush (graded like the
+        lairs), an earthquake, a volcano, a meteor shower / lightning storm, a crater field, rarely an elite or a
+        spell urn. Payload records go into the synthesised `LevelData.things` (1999 records - budget them, or add a
+        mode-side record table consulted by `switch_activate` for ids above the level file's). Check first which
+        switch types fire for whom: they must fire for **any** wizard (AI bots included) and deterministically,
+        never by the local player only (same trap as the wake rule); one-shot vs re-arming per switch (re-arm
+        timer under the mode flag), optional visible marker (rune / shimmer) as a `WorldParams` choice.
+      - *Portals*: effect 0x22 Teleport carries its destination cell (`Thing.home`, ENGINE.md 2.6); the placer
+        places linked pairs (both ends, so they work both ways) with a minimum separation (e.g. a quarter of the
+        world), never inside a spawn plateau, a few per player; destination wrap and arrival through the world
+        accessors (round 11 session 1: the teleport gate's default 0x8000 / 128-cell destination is a 256-world
+        constant to replace). Bots must learn to use them in round 17 (portal graph as a shortcut in pathing).
+      - Both carried by the world seed / `WorldParams` (counts, payload weights, re-arm on / off), so every peer and
+        every replay places the same triggers; a scenario per payload type (fly over, assert the spawn).
 - [ ] B6 deterministic wake-near-any-wizard under the mode flag (session 3; the distance maths is already int64 /
       torus-correct). Done in session 1: `ai_wizard` castle-site quadrants scale with the world, sound cull int64.
 - [x] B7 `render_ext` window `kWin = min(N/2, 256)`, vertex cache sizing, camera no longer truncated to u16, draw
@@ -544,7 +561,10 @@ the briefing:
   guard; the local passes already run on any N.
 - **B5**: `worldgen.cpp` feature placer and `WorldParams` (seed, size, players, symmetry, roughness, water, springs,
   wild density, lair grades, day length, blight), carried by `ModeParams` / movies / save states / `NetGameRules`;
-  replaces the `world_widen_tiled` call in `mode_level.cpp`'s level-start hook.
+  replaces the `world_widen_tiled` call in `mode_level.cpp`'s level-start hook. Include the **trigger areas** (switch
+  Things with mana / ambush / earthquake / volcano / storm payloads, firing for any wizard incl. bots) and the
+  linked **teleport portals** listed under B5 - first read how the original's switch types detect who flies over
+  them and how effect 0x22 picks its destination.
 - `mcport rts --size N` on a generated world; screenshots of the result looked at.
 - Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2` (the user's machine maxed out with five
   full-parallel builds in session 1).
