@@ -210,3 +210,53 @@ the class passes), so no agent split. Result and design: `docs/analysis/port_wor
 - Options: `rts --size N --symmetry S --water % --rough % --continent % --springs N --wild % --lairs N --triggers N
   --portals N` (`none` for the counts); scenario header `rts ... size N symmetry S water % rough % triggers N portals N
   [tiled] [generate]`.
+
+## Session 3 (2026-10-08): wake rule, world tests, sync at 1024, the gate
+
+The integrator does B6 (wake near any wizard), the network part (ModeParams in `NetGameRules`, computer wizards in a
+network mode run, a two-process 1024 sync test, `mcport rts` over the network), the range-scaling decisions and the
+gate. Two agents write tests (rules above apply: own files, own build dir, zero warnings, all ctest gates; reports in
+`docs/analysis/`). **CPU: build with `cmake --build ../build_X --config Release --parallel 2 -- -p:CL_MPCount=1` and run
+`ctest -C Release -j 2`** (the user's machine is shared with the integrator's builds). `timectl_test` shares a temp dir
+across build dirs: if only it fails, rerun it alone.
+
+### F - `world_test`: the 256 world through the new code equals the pre-round-11 code (test `world_test`, report `port_world_test.md`, build `build_F`)
+
+- Oracle: the last commit before round 11, **`bf77e98`**. Check it out as a git worktree in your scratch dir
+  (`git worktree add <scratch>/old bf77e98`; remove it with `git worktree remove` at the end; never commit there),
+  build it in its own build dir, and add a throwaway dumper there (an extra `mc_unit_test` in the worktree only)
+  that writes, for **every level levels.dat holds (0..69)**: FNV-1a 32 hashes of the five maps (type, height, light,
+  flags, cell_things - 256 x 256 each) and of the raw `GameState` right after `sim_load_level(L)`, then the GameState
+  hash after 1, 100 and 500 `game_tick_sim()` ticks with idle input, plus the same for the Hidden Worlds levels when
+  `MC_HIDDEN_DIR` is set (`extracted/gog_cd/CARPET`; skip otherwise). Check the old code is deterministic across two
+  runs in one process first (if a hash depends on what ran before, say which and reset it in both).
+- Store the result as a golden text file `src/tests/data/world_levels_256.txt` (one line per level; small) - look at
+  how other tests find repo files (`MC_REPO_DIR`).
+- `src/tests/world_test.{cpp,cmake}` (current tree): the same hashes computed through the new code (GameState via
+  `state_to_image`, `mc_image.h`; maps via `g_world` at 256) must equal the golden file line for line. Plus small wide
+  probes that are not already in `world_{terrain,things,creatures,persist,render}_test` (read them first): a 512 and a
+  2048 tiled world (the session-1 tests use 1024 only) - a seam walk of one creature across both seams and a spiral /
+  area query across the seam; `world_dist_sq` / `math_atan2_w` / `pos_dist_sq_xyz` probes at 500, 1000 and 2000 cells in
+  a 4096 world (no overflow, no torus alias); two runs of 2000 ticks of `rts --size 1024 --bots 3` (generated world,
+  `mode_start_run` + `sim_load_level(MODE_LEVEL_INDEX)`, as `world_gen_test` does) in one process with identical
+  per-tick `net_state_checksum` sequences. Keep the test under ~90 s in Release.
+- Report: what the golden file holds and how it was made (exact commands, so it can be regenerated), numbers, any
+  level that differs (that would be a round 11 bug: find it and report the exact fix, do not edit files you do not
+  own - `world_test.*` and the data file are yours).
+
+### G - `MC_REF_WORLD` and the wide renderer at dd 127 / 255 (`tests/reference_test.{cpp,cmake}`, `tests/world_render_test.{cpp,cmake}`, report `port_world_refwide.md`, build `build_G`)
+
+- `reference_test` with `MC_REF_WORLD=N` (512 / 1024; unset = today, byte-identical gate): after the snapshot / level
+  load the world is widened with `world_widen_tiled(N)` (as `mode_level.cpp` does for `--tiled`), then the run
+  compares as usual against the original's dumps (the port's state goes through `state_to_image`, so the low halves
+  are compared). Expected: identical until a Thing's interaction spans the old 255 -> 256 boundary (in the 256 world
+  two Things 16 units apart across x = 0 are 65520 units apart in the tiled world) or the wake / sight test of the
+  local player does. Report per reference set (movie 0 full, the 8 levels, gen) the first divergence tick and **why**
+  (which Thing, which interaction - verify that it is a boundary effect and not a round 11 bug). A ctest entry
+  `reference_world` that runs movie 0 (the default reference) at `MC_REF_WORLD=1024` up to the first tick where a
+  boundary interaction is expected (pick the tick from your analysis) and must be identical up to there.
+- `world_render_test`: add parts for a 1024 world at draw distance 127 and 255 (kWin 256): tiled-world frames equal
+  across tiles / seams at dd 127; at dd 255 no cell drawn twice, the far ring drawn, frame time printed for 127 vs
+  255 (Release), and one **generated** 1024 world frame (`rts --size 1024` through `mode_start_run`) at dd 255 written as
+  PPM - look at it. Also check `render_ext_test` needs nothing (say so in the report).
+- Report: the per-set divergence table with causes, what the render parts check, the frame times.
