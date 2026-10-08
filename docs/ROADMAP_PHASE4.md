@@ -238,7 +238,8 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
         accessors (round 11 session 1: the teleport gate's default 0x8000 / 128-cell destination is a 256-world
         constant to replace). Bots must learn to use them in round 17 (portal graph as a shortcut in pathing).
       - Both carried by the world seed / `WorldParams` (counts, payload weights, re-arm on / off), so every peer and
-        every replay places the same triggers; a scenario per payload type (fly over, assert the spawn).
+        every replay places the same triggers; a scenario per payload type (fly over, assert the spawn). Keep the
+      payload table data-driven: round 20 adds MC2's trigger types in a second pass.
 - [ ] B6 deterministic wake-near-any-wizard under the mode flag (session 3; the distance maths is already int64 /
       torus-correct). Done in session 1: `ai_wizard` castle-site quadrants scale with the world, sound cull int64.
 - [x] B7 `render_ext` window `kWin = min(N/2, 256)`, vertex cache sizing, camera no longer truncated to u16, draw
@@ -465,6 +466,11 @@ extension-table handler plus a `kSpells`-style row; spell Things are class 12 wi
       change. v2 (only if v1 is popular) = true interiors as separate 256 worlds with the cavern sky and palette,
       entered by a portal Thing; needs the world module to hold several world instances and Things to carry a
       realm id - a deep change, decide after v1.
+- [ ] **Trigger / feature pass 2** (user, 2026-10-08): once MC2's data loads, a second pass over the world placer's
+      trigger areas and portals (round 11 B5) for MC2's additional trigger / switch types and level features
+      (inventory them from the MC2 level format and `phase4_research_mc2.md` first): new payload kinds in the
+      weighted tables, any new activation rules (still firing for any wizard, deterministic), MC2-style portals /
+      structures, scenarios per new type.
 - Gate: MC2 creatures appear in wild lairs and in the lair's unlock list, pixel check of remapped sprites.
   Effort 10-14 days (+15-20 for dungeons v2).
 
