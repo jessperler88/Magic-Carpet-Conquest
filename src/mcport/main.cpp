@@ -1137,6 +1137,11 @@ int main(int argc, char **argv) {
         // while the pause menu is open, switched off outside a level
         const bool cursor_mouse = s_menu.is_open() ? inspect_tool_cursor_mode()
                                                     : inspect_tool_mouse(plat, in, run == RUN_LEVEL);
+        // port: the mouse wheel zooms the spell book's map screen (input modes 2 / 4; display only, hud.h)
+        if (in.wheel && run == RUN_LEVEL && !s_menu.is_open() && !s_console.is_open()) {
+            const uint8_t im = g_state->players[g_state->local_player & 7].input_mode;
+            if (im == 2 || im == 4) hud_map_zoom_step(in.wheel);
+        }
         if (devices && !s_menu.is_open() && !dcam_input && !s_console.is_open()) {   // round 10: the console takes the keys
             // Feed the device state the original's interrupt handlers kept. Releases (keys and mouse
             // buttons) are held back until the game / front end has run once, so a tap shorter than a

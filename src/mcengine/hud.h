@@ -44,6 +44,11 @@ void render_set_view_window_top(const FrameBuffer &fb, int size);
 void ui_draw_radar(int x, int y, int cam_x, int cam_y, int w, int h, int yaw, int scale, int unused, int rect);
 // ui_draw_radar_blips_42a20: the same arguments; things, castle line, centre cross.
 void ui_draw_radar_blips(int x, int y, int cam_x, int cam_y, int w, int h, int yaw, int scale, int unused, int rect);
+// Port: zoom of the spell book's map screen (display only, never read by the simulation). 100 = the original
+// 0xaa units per pixel (one 256-cell world across); 25 .. hud_map_zoom_max_pct() (the whole world of a wider one).
+extern int g_hud_map_zoom_pct;
+int  hud_map_zoom_max_pct();
+void hud_map_zoom_step(int steps);     // mouse wheel steps: + = closer, - = further out
 // ui_draw_map_43910(x, y, w, h, cell_x, cell_y): rectangular overview (no caller in the exe).
 void ui_draw_map(int x, int y, int w, int h, int cell_x, int cell_y);
 void ui_draw_status_bars(Thing *player_thing);                         // ui_draw_status_bars_219f0

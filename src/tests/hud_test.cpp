@@ -297,6 +297,16 @@ static void test_frames(const char *game) {
             render_frame(m.fb, local);
             CHECK(m.guards_ok());
             write_ppm(std::string("hud_test_frame_map_") + tag + ".ppm", m.fb);
+            // port: the wheel zoom (display only): closer in the 256 world; the original scale is the maximum there
+            Canvas z(W, H);
+            hud_map_zoom_step(3);
+            CHECK(g_hud_map_zoom_pct == 51);
+            render_frame(z.fb, local);
+            CHECK(z.guards_ok());
+            CHECK(std::memcmp(z.fb.pixels, m.fb.pixels, (size_t)W * H) != 0);
+            write_ppm(std::string("hud_test_frame_map_zoom_") + tag + ".ppm", z.fb);
+            hud_map_zoom_step(-10);
+            CHECK(g_hud_map_zoom_pct == 100);
         }
         // help screen
         {
@@ -321,6 +331,21 @@ static void test_frames(const char *game) {
         rec.input_mode = 0;
     }
     set_mode(game, 8);
+    // a 1024 world (the snapshot's level tiled): the wheel zooms out to the whole world (400 %)
+    {
+        CHECK(world_widen_tiled(1024));
+        CHECK(hud_map_zoom_max_pct() == 400);
+        hud_map_zoom_step(-20);
+        CHECK(g_hud_map_zoom_pct == 400);
+        Canvas w(640, 480);
+        rec.input_mode = 4;
+        render_frame(w.fb, local);
+        CHECK(w.guards_ok());
+        write_ppm("hud_test_frame_map_world1024.ppm", w.fb);
+        rec.input_mode = 0;
+        g_hud_map_zoom_pct = 100;
+        world_set_size(256);
+    }
 }
 
 int main(int argc, char **argv) {

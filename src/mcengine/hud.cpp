@@ -707,6 +707,18 @@ static void spell_book(int local) {
     }
 }
 
+int g_hud_map_zoom_pct = 100;
+
+int hud_map_zoom_max_pct() { return g_world.size > 256 ? 100 * g_world.size / 256 : 100; }
+
+void hud_map_zoom_step(int steps) {
+    int z = g_hud_map_zoom_pct;
+    for (; steps > 0; steps--) z = z * 4 / 5;           // wheel away from the user: closer
+    for (; steps < 0; steps++) z = z * 5 / 4 + 1;       // towards the user: more of the world
+    g_hud_map_zoom_pct = std::clamp(z, 25, hud_map_zoom_max_pct());
+    if (std::abs(g_hud_map_zoom_pct - 100) < 6) g_hud_map_zoom_pct = 100;   // snap back to the original scale
+}
+
 static void map_screen(const FrameBuffer &fb, int local, const Camera &cam) {
     if (s_drawing) {
         if (s_last_clear != 2) { clear_screen(fb); s_last_clear = 2; }
@@ -719,9 +731,12 @@ static void map_screen(const FrameBuffer &fb, int local, const Camera &cam) {
     // u16, which addresses the same cells of the 256 world). Scale 0xaa over 0x17e px is the whole 256-cell
     // world; in a wider world the map screen stays at that scale and shows the 254-cell window centred on
     // the player (the radar painter wraps on the torus, the blips use the shortest torus difference).
+    // port: g_hud_map_zoom_pct (mouse wheel, display only) scales the 0xaa units per pixel; 100 = the original
     const int cx = world_log_x(local, e), cy = world_log_y(local, e), yaw = (int16_t)e.yaw;
-    ui_draw_radar(0, 0, cx, cy, 0x17e, lo1() ? 0x17a : 0x19e, yaw, 0xaa, unused, 1);
-    ui_draw_radar_blips(0, 0, cx, cy, 0x17e, lo1() ? 0x17e : 0x19e, yaw, 0xaa, unused, 1);
+    const int zoom = std::clamp(g_hud_map_zoom_pct, 25, hud_map_zoom_max_pct());
+    const int scale = zoom == 100 ? 0xaa : 0xaa * zoom / 100;
+    ui_draw_radar(0, 0, cx, cy, 0x17e, lo1() ? 0x17a : 0x19e, yaw, scale, unused, 1);
+    ui_draw_radar_blips(0, 0, cx, cy, 0x17e, lo1() ? 0x17e : 0x19e, yaw, scale, unused, 1);
     if (g_mouse_y >= 0x17e) ui_draw_player_list();
 }
 
