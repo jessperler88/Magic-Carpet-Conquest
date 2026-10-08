@@ -1298,7 +1298,7 @@ int main(int argc, char **argv) {
         if (dcam_input && !cursor_mouse && (in.mouse_dx || in.mouse_dy)) {
             for (Camera *c : {&s_dcam, &s_dcam_prev}) {
                 c->yaw = (c->yaw + in.mouse_dx * 2) & MC_ANGLE_MASK;
-                c->pitch -= in.mouse_dy;
+                c->pitch += in.mouse_dy;        // mouse up = look up (user, 2026-10-08: it was inverted)
             }
         }
         if (follow && run == RUN_DEMO) cam_prev = cam;
