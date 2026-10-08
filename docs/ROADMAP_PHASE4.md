@@ -103,8 +103,9 @@ Port matter); awake radius 24 cells; pool hard ceiling 32768 Things (i16 indices
 8. **Licensing**: remc2 / MC2-HD and mgcarpet stay reference only (GPL). MC2 *data* is loaded from the user's own
    GOG copy via `MC_MC2_DIR` (never redistributed, never modified in place); our loaders are extended (only
    `mctools.level` / `mcdata/level.c` need an MC2 variant - sprites, tmaps, palettes, RNC are identical).
-9. **GPU renderer**: not needed. The CPU `render_ext` does 4K at dd 127 in 6 ms on 24 threads; the overview
-   renderer reuses its rasteriser and thread pool. A GPU path stays a Phase 5 option for filtered textures.
+9. **GPU renderer**: round 11.5 (changed 2026-10-08: the game runs at 35-45 fps at dd 127 in play, although
+   `render_ext` alone measured 6 ms at 4K). The CPU `render_ext` stays as the fallback; the overview renderer
+   (round 16) and the RGBA overlay become GPU passes.
    What the mode does need is a **native-resolution RGBA overlay layer** in `ComposeOutput` with a real font
    (health plates, damage numbers, RTS UI) - the 640-wide virtual 2D layer is fine for a first version of plates
    and numbers, not for the RTS UI.
@@ -236,6 +237,38 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
 - Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` runs, two instances stay in sync, the free camera
   flies the whole world. Effort 25-35 days (the largest round; split: accessors / positions / generator /
   placer / renderer+tests).
+
+### Round 11.5 - GPU renderer (added 2026-10-08 at the user's request)
+
+Why: in play the game averages **35-45 fps at draw distance 127** (user's measurement, before round 11). That is
+~25 ms per frame, while `render_ext` alone measured 2-6 ms at 4K / 127 cells (`port_render_ext.md`, Release, 24
+threads) - so the frame time is mostly spent somewhere else, or the build being played (Debug) is the cause. The
+1024-cell worlds, dd 255 and round 16's overview make the load only grow. Numbered 11.5 so later rounds keep their
+numbers.
+
+- [ ] **Measure first** (Release and Debug, 1080p and native, dd 80 / 127 / 255): per frame `render_ext` list build
+      and rasterise, HUD, compose / upscale, 8-bit -> RGBA conversion, SDL texture upload / present, sim ticks
+      (extend the F11 profile line and `MC_REXT_PERF`; `tick_profile` covers the sim). Write the table into the
+      round report; if one CPU stage dominates, fix it in the same round.
+- [ ] **D3D11 renderer** (`mcport/gpu/`, default choice: Direct3D 11 directly, since the platform already runs on
+      SDL's d3d11 backend and the port is Windows-only; SDL2's renderer has no custom shaders): terrain as a
+      height-field mesh (vertex buffer per chunk of 32x32 cells, rebuilt only when cells change - castle raise,
+      craters, retexture), the texture atlas and the shade / blend tables as textures, **an 8-bit look kept on the
+      GPU** (palette index + shade -> palette lookup in the pixel shader, point sampling, the original's fog /
+      haze curve), sprites as camera-facing quads from the sprite cache (palette-index textures), water / sky /
+      reflections as in `render_ext`. Display lists come from the same per-frame Thing pass `render_ext` uses
+      (interpolated positions, segment layout, mana-ball colours), so nothing new reads game state.
+- [ ] **Composition on the GPU**: the 640-wide HUD / menus / overlays uploaded as one palette-index texture and
+      blended over the 3D view, upscaling and the palette effects (fades, flashes) in the shader; the round-16
+      RGBA overlay layer and the oblique overview camera (B8) become GPU passes on the same device.
+- [ ] **Settings / fallback**: `render.backend = gpu | cpu` (`mcport.ini`, pause menu); the CPU `render_ext` stays as the
+      fallback and for headless runs / tests; the faithful renderer and every pixel reference are untouched
+      (render-only, default settings unchanged); vsync and an fps cap.
+- [ ] Tests: a GPU-vs-`render_ext` image comparison on fixed cameras (level 38, a tiled 1024 world at the seam;
+      tolerance metric, PNGs looked at), headless skip when no D3D11 device; determinism unaffected (checksums with
+      both backends identical); frame-time numbers in the report.
+- Gate: 1080p and 4K at dd 127 **and** dd 255 hold the display refresh rate (target >= 144 fps uncapped at 1080p /
+  127) in Release; Debug playable; screenshots of both backends side by side. Effort 10-14 days.
 
 ### Round 12 - launching the mode: menu, setup screen, lobby, match rules v1
 
@@ -467,6 +500,7 @@ extension-table handler plus a `kSpells`-style row; spell Things are class 12 wi
 |---|---|---|---|
 | 10 | debug suite + mode skeleton + movie v3 (**done 2026-10-08**) | 8-10 | - |
 | 11 | world module, int32 positions, generator, placer (**session 1 of 3 done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
+| 11.5 | GPU renderer (D3D11), GPU composition, frame-time profile | 10-14 | 11 (world-size renderer) |
 | 12 | menu urn, setup screen, lobby, rules v1, bots v1 | 8-12 | 11 |
 | 13 | plates, numbers, elites, drops, levels | 8-10 | 10 (hook, overlay); 11 (lairs) |
 | 14 | resources, buildings, gatherers, growth, upkeep | 12-16 | 12 |
@@ -477,25 +511,26 @@ extension-table handler plus a `kSpells`-style row; spell Things are class 12 wi
 | 19 | relay, input delay, rejoin, spectators, replays | 12-16 | 15 |
 | 20 | MC2 assets, dungeons v1 | 10-14 | 13, 15 |
 | 21 | match flow, progression, balance, polish | open | all |
-| | **total to a playable online mode (10-19)** | **125-167** | |
+| | **total to a playable online mode (10-19, incl. 11.5)** | **135-181** | |
 
 Rounds 13 and 18 can run alongside 14-16 (different files); 19 can start after 15. Rounds 11 and 12 are the
-critical path.
+critical path; 11.5 touches only the renderer / platform, so it can overlap round 12's front-end work.
 
 ---
 
 ## 5. Decisions for the user (defaults chosen so work can start)
 
 1. **Mode name**: "Conquest" is a working title.
-2. **World sizes**: 512 / 768 / 1024 / 2048, default 1024 (16x area). Powers of two use masks, 768 uses modulo;
-   all go through `world_diff`.
+2. **World sizes**: 512 / 1024 / 2048 / 4096, default 1024 (16x area). Powers of two only (round 11: masks
+   everywhere; 768 dropped), all through `world.h`.
 3. **Economy**: essence (returning souls) for armies, four resources for towns, mana stays the win resource.
    Simpler alternative if it tests badly: mana-only costs with the WC3 upkeep curve.
 4. **First-person orders**: four fixed orders + type filter; no free cursor in first person.
 5. **Native overlay font**: a bundled open-licence TTF rendered to an atlas at startup (round 16).
 6. **MC2 data**: loaded from the user's GOG copy via `MC_MC2_DIR`; nothing from it is shipped.
 7. **Dungeons**: surface canyons first; true interiors only after that proves fun.
-8. **GPU renderer**: not in Phase 4.
+8. **GPU renderer**: in Phase 4 as round 11.5 (user, 2026-10-08). Default API Direct3D 11 (Windows-only port,
+   SDL already on d3d11); alternatives OpenGL 3.3 through SDL (portable) or SDL3's GPU API (an SDL2 -> SDL3 move).
 
 ---
 
