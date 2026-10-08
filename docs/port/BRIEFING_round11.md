@@ -186,3 +186,25 @@ the wide-world test checks and its numbers, deviations / open sites (anything st
   same camera offset inside different tiles and straddling both seams produces **pixel-identical** frames to the
   256 world at (x mod 65536); the radar too. Faithful renderer the same at its 20-cell view. Write the PNGs to
   your scratch dir and look at one seam frame.
+
+## Session 2 (2026-10-08, done by the integrator alone - no agents): the generated world
+
+B4 + B5 in one coherent piece (generator and placer depend on each other: plateaus before rivers, features after
+the class passes), so no agent split. Result and design: `docs/analysis/port_world_gen.md`. What later work must know:
+
+- **Entry point**: `sim.cpp level_start_from_state` calls `g_hook_level_world` (worldgen.h) before `terrain_build`;
+  `mode_level.cpp` installs it; `worldgen_build(params, &g_state->level)` sizes the world, generates the maps and
+  *replaces* `level.things` with placed records, which the original's level start then spawns. Nothing else knows a
+  world was generated: save states / movies store maps and records; a v3 movie regenerates from its ModeParams.
+- **Which runs generate**: `mode_params_generated(p)` (mode.h): world_size > 256 unless `MODE_PARAM_TILED`
+  (`--tiled`, the session 1 test bed), or 256 with `MODE_PARAM_GENERATE`. Template mode levels and the campaign are
+  untouched (references identical).
+- **WorldParams** (mode.h, 8 bytes in ModeParams where round 10 had reserved zeros; 0 = default): symmetry, roughness,
+  water, continent, springs, wild, lairs, features (triggers | portals nibbles). Full - grow it with a ModeState v2.
+- **Mode-run rule changes**: switches fire for computer wizards (`scenery.cpp`); a generated world's pool is at least
+  `kGeneratedWorldSlots` = 8192 (`thing.cpp thing_pool_wanted_slots`).
+- `worldgen_last_layout()` = what was placed where (seats, springs, lairs, triggers + DisIds, portal pairs, towns,
+  groves); not saved. Tests: `world_gen_test` (PNG maps in `MC_WORLD_GEN_OUT`).
+- Options: `rts --size N --symmetry S --water % --rough % --continent % --springs N --wild % --lairs N --triggers N
+  --portals N` (`none` for the counts); scenario header `rts ... size N symmetry S water % rough % triggers N portals N
+  [tiled] [generate]`.

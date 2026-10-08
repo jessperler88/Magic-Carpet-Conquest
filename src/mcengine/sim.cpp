@@ -15,6 +15,7 @@
 #include "mode.h"
 #include "world_set.h"
 #include "world.h"
+#include "worldgen.h"
 #include "mcfile.h"
 #include "rnc.h"
 #include <cstdio>
@@ -97,7 +98,9 @@ void level_reset_state() {
 void level_start_from_state(int index) {
     if (!(g_cfg->flags & 0x10)) g_state->player_count = g_state->level.player_count;
     g_cfg->level = (uint16_t)index;
-    terrain_build(g_state->level.gen);
+    // port (Phase 4 round 11): a mode level with a generated world is built by worldgen.cpp (world size, maps and
+    // the placed THING_INIT records); the campaign and template mode levels go through terrain_build
+    if (!(g_hook_level_world && g_hook_level_world())) terrain_build(g_state->level.gen);
     thing_pool_reset();
     terrain_generate_features();                 // "Generate features"
     std::memset(&g_pos_scratch, 0, sizeof g_pos_scratch);

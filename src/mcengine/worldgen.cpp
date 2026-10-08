@@ -1,0 +1,565 @@
+// The generated world of a mode run (worldgen.h). Round 11 session 2 (B4 + B5); port-only.
+#include "worldgen.h"
+#include "terrain.h"
+#include "world.h"
+#include "mc_globals.h"
+#include "mc_math.h"
+#include <algorithm>
+#include <cstring>
+
+bool (*g_hook_level_world)() = nullptr;
+
+namespace {
+
+WorldLayout s_last;
+
+// ---- the generator's LCG (its own: never g_rng16, never the mode's ModeRng) -------------------------------
+struct Rng {
+    uint64_t s;
+    explicit Rng(uint64_t seed) : s(seed * 0x9e3779b97f4a7c15ull + 0x632be59bd9b4e019ull) {}
+    uint32_t next() {
+        s = s * 6364136223846793005ull + 1442695040888963407ull;
+        return (uint32_t)(s >> 33);
+    }
+    int below(int n) { return n <= 1 ? 0 : (int)(next() % (uint32_t)n); }
+    int range(int lo, int hi) { return lo + below(hi - lo + 1); }    // inclusive
+};
+
+uint32_t mix(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352du;
+    x ^= x >> 15; x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// ---- symmetry ---------------------------------------------------------------------------------------------
+// The group elements acting on cell coordinates (about cell (0, 0) of the torus). Element k of the dihedral
+// group: rotations by k * 90 degrees (k < 4), then the four mirrors.
+int group_order(int sym) {
+    switch (sym) {
+    case WORLD_SYM_POINT: case WORLD_SYM_MIRROR: return 2;
+    case WORLD_SYM_ROT4: return 4;
+    case WORLD_SYM_DIHEDRAL: return 8;
+    default: return 1;
+    }
+}
+void group_apply(int sym, int k, int x, int y, int *ox, int *oy) {
+    if (sym == WORLD_SYM_MIRROR) {
+        *ox = k ? -x : x; *oy = y;
+    } else {
+        if (sym == WORLD_SYM_POINT && k == 1) k = 2;
+        switch (k) {
+        case 0: *ox = x;  *oy = y;  break;
+        case 1: *ox = -y; *oy = x;  break;
+        case 2: *ox = -x; *oy = -y; break;
+        case 3: *ox = y;  *oy = -x; break;
+        case 4: *ox = y;  *oy = x;  break;
+        case 5: *ox = -x; *oy = y;  break;
+        case 6: *ox = -y; *oy = -x; break;
+        default: *ox = x; *oy = -y; break;
+        }
+    }
+    *ox = world_wrap_cell(*ox);
+    *oy = world_wrap_cell(*oy);
+}
+
+struct Cell { int x, y; };
+
+int orbit(int sym, int x, int y, Cell out[8]) {
+    const int n = group_order(sym);
+    for (int k = 0; k < n; k++) group_apply(sym, k, x, y, &out[k].x, &out[k].y);
+    return n;
+}
+
+// torus distance in cells (Euclidean, integer)
+int cell_dist(int ax, int ay, int bx, int by) {
+    const int n = g_world.size;
+    int dx = (int)((uint32_t)(bx - ax + n / 2) & g_world.cell_mask) - n / 2;
+    int dy = (int)((uint32_t)(by - ay + n / 2) & g_world.cell_mask) - n / 2;
+    return (int)world_isqrt((int64_t)dx * dx + (int64_t)dy * dy);
+}
+int cheb_dist(int ax, int ay, int bx, int by) {
+    const int n = g_world.size;
+    int dx = (int)((uint32_t)(bx - ax + n / 2) & g_world.cell_mask) - n / 2;
+    int dy = (int)((uint32_t)(by - ay + n / 2) & g_world.cell_mask) - n / 2;
+    return std::max(std::abs(dx), std::abs(dy));
+}
+
+// The average over the group is symmetric and seamless, but it only keeps the field's full relief where a cell's
+// images are close together (near the group's fixed points: the centre and the corners would become one huge
+// mountain or trench, the rest flat). So the average's deviation from the mean is divided by its expected standard
+// deviation: with correlation rho(d) = max(0, 1 - d / L) between two images d cells apart (L ~ the decorrelation
+// length of the fractal, whose levels above 128 cells are independent), Var(avg) / Var(f) = sum_ab rho(d_ab) / g^2.
+// That ratio is smooth, so it is computed every 4 cells.
+void symmetrise(std::vector<int32_t> &f, int sym) {
+    const int g = group_order(sym);
+    if (g == 1) return;
+    int64_t total = 0;
+    for (uint32_t i = 0; i < g_world.cells; i++) total += f[i];
+    const int64_t mean = total / (int64_t)g_world.cells;
+    const int L = std::min(256, g_world.size / 2);
+    const int n = g_world.size, q = n / 4;
+    std::vector<int32_t> sd((size_t)q * q);             // sqrt(ratio) in 1/256
+    for (int y = 0; y < q; y++)
+        for (int x = 0; x < q; x++) {
+            Cell img[8];
+            orbit(sym, x * 4 + 2, y * 4 + 2, img);
+            int64_t acc = 0;                            // sum over ordered pairs, rho in 1/65536
+            for (int a = 0; a < g; a++)
+                for (int b = 0; b < g; b++) {
+                    const int d = a == b ? 0 : cell_dist(img[a].x, img[a].y, img[b].x, img[b].y);
+                    acc += d >= L ? 0 : (int64_t)(L - d) * 65536 / L;
+                }
+            sd[(size_t)y * q + x] = (int32_t)std::max<uint32_t>(world_isqrt(acc / (g * g)), 1);
+        }
+    std::vector<int32_t> out(f.size());
+    for (uint32_t i = 0; i < g_world.cells; i++) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
+        int64_t sum = 0, s = 0;                         // s over the orbit: the same for every image (symmetric)
+        for (int k = 0; k < g; k++) {
+            int ox, oy;
+            group_apply(sym, k, x, y, &ox, &oy);
+            sum += f[world_cell(ox, oy)];
+            s += sd[(size_t)(oy / 4) * q + ox / 4];
+        }
+        const int64_t dev = sum / g - mean;
+        out[i] = (int32_t)(mean + dev * 256 * g / std::max<int64_t>(s, 1));
+    }
+    f.swap(out);
+}
+
+// ---- placement -----------------------------------------------------------------------------------------
+constexpr int kPlateauHalf = 12;        // the 24 x 24 spawn plateau
+constexpr int kRamp = 12;               // blended ring around it
+constexpr int kRecords = 1999;
+
+struct Placer {
+    const WorldGenSettings &s;
+    LevelData *level;
+    Rng rng;
+    WorldLayout &out;
+    std::vector<Cell> seats;
+    int voronoi = 128;                  // half the smallest seat-to-seat distance (cells)
+    int next_dis = 1;                   // DisIds of the trigger payloads (< 0x8000: switch_id sign-extends)
+    int nrec = 0;
+
+    Placer(const WorldGenSettings &s_, LevelData *lv, uint32_t seed, WorldLayout &o)
+        : s(s_), level(lv), rng(seed), out(o) {}
+
+    bool add(uint16_t cls, uint16_t model, int x, int y, uint16_t dis = 0, uint16_t swi_sz = 0, uint16_t swi_id = 0,
+             uint16_t parent = 0, uint16_t child = 0) {
+        if (nrec >= kRecords) { out.records_dropped++; return false; }
+        ThingInit &r = level->things[nrec++];
+        r.cls = cls; r.model = model;
+        r.x = (uint16_t)world_wrap_cell(x); r.y = (uint16_t)world_wrap_cell(y);
+        r.dis_id = dis; r.swi_sz = swi_sz;
+        r.swi_id = swi_id; r.parent = parent; r.child = child;
+        return true;
+    }
+    int free_records() const { return kRecords - nrec; }
+    void feature(uint8_t kind, uint8_t grade, int x, int y, uint16_t link = 0) {
+        out.features.push_back(WorldFeature{kind, grade, (uint16_t)world_wrap_cell(x), (uint16_t)world_wrap_cell(y), link});
+    }
+
+    // distance from the nearest seat in units of the seat's own region (0 = on it, 1 = the border between two)
+    int band_pct(int x, int y) const {
+        int best = 1 << 30;
+        for (const Cell &c : seats) best = std::min(best, cell_dist(x, y, c.x, c.y));
+        return best * 100 / std::max(voronoi, 1);
+    }
+    int cls_at(int x, int y) const { return g_map_flags[world_cell(x, y)] & 7; }
+    bool land(int x, int y) const {
+        const int c = cls_at(x, y);
+        return c >= 2 && c <= 5;
+    }
+    bool near_feature(int x, int y, int min_dist) const {
+        for (const WorldFeature &f : out.features)
+            if (cell_dist(x, y, f.x, f.y) < min_dist) return true;
+        return false;
+    }
+
+    // A point whose whole orbit lies in the band [lo, hi] % of the seat region, on land, at least SPACING cells
+    // from every placed feature and from each other. False after TRIES candidates.
+    bool pick_orbit(int lo, int hi, int spacing, bool need_land, Cell orb[8], int *norb, int tries = 64) {
+        const int g = group_order(out.symmetry);
+        for (int t = 0; t < tries; t++) {
+            const int x = rng.below(g_world.size), y = rng.below(g_world.size);
+            const int n = orbit(out.symmetry, x, y, orb);
+            bool ok = true;
+            for (int i = 0; i < n && ok; i++) {
+                const int b = band_pct(orb[i].x, orb[i].y);
+                if (b < lo || b > hi) ok = false;
+                else if (need_land && !land(orb[i].x, orb[i].y)) ok = false;
+                else if (near_feature(orb[i].x, orb[i].y, spacing)) ok = false;
+                for (int j = 0; j < i && ok; j++)
+                    if (cell_dist(orb[i].x, orb[i].y, orb[j].x, orb[j].y) < spacing) ok = false;
+            }
+            if (ok && n == g) { *norb = n; return true; }
+        }
+        return false;
+    }
+
+    // a land cell within R cells of (x, y) (the centre itself when nothing else is found)
+    Cell scatter(int x, int y, int r) {
+        for (int t = 0; t < 8; t++) {
+            const int cx = x + rng.range(-r, r), cy = y + rng.range(-r, r);
+            if (land(cx, cy)) return Cell{world_wrap_cell(cx), world_wrap_cell(cy)};
+        }
+        return Cell{world_wrap_cell(x), world_wrap_cell(y)};
+    }
+};
+
+// creature models (level.py MODEL_NAMES class 5) by lair grade; krakens (water) are not placed on land
+struct Pack { uint8_t model; uint8_t lo, hi; };
+const Pack kPacks[5][3] = {
+    { {2, 6, 10}, {1, 4, 7},  {10, 4, 6} },     // 1: bees, vultures, emus
+    { {5, 3, 5},  {3, 2, 3},  {4, 3, 5}  },     // 2: crabs, worms, archers
+    { {7, 3, 5},  {9, 4, 6},  {8, 2, 4}  },     // 3: trolls, skeletons, griffons
+    { {0, 1, 2},  {8, 3, 5},  {7, 5, 7}  },     // 4: dragons, griffons, trolls
+    { {16, 1, 2}, {11, 1, 1}, {0, 2, 3}  },     // 5: wyverns, a genie, dragons
+};
+
+// trigger payload weights per band (safe / contested / rich): the data-driven table of B5 (round 20 adds MC2's)
+struct PayloadWeight { uint8_t kind, w[3]; };
+const PayloadWeight kPayloads[] = {
+    {WTRIG_MANA, {6, 4, 3}}, {WTRIG_AMBUSH, {2, 4, 4}}, {WTRIG_EARTHQUAKE, {1, 2, 2}}, {WTRIG_VOLCANO, {0, 1, 2}},
+    {WTRIG_STORM, {1, 2, 2}}, {WTRIG_CRATERS, {1, 1, 1}}, {WTRIG_ELITE, {0, 0, 1}}, {WTRIG_URN, {0, 1, 1}},
+};
+
+int band_of(int pct) { return pct < 55 ? 0 : (pct < 95 ? 1 : 2); }
+
+void place_pack(Placer &P, int grade, int x, int y, uint16_t dis) {
+    grade = std::clamp(grade, 1, 5);
+    const Pack &k = kPacks[grade - 1][P.rng.below(3)];
+    const int n = P.rng.range(k.lo, k.hi) * std::max(P.s.wild_pct, 50) / 100;
+    for (int i = 0; i < std::max(n, 1); i++) {
+        const Cell c = P.scatter(x, y, 3);
+        P.add(5, k.model, c.x, c.y, dis, 0, dis);
+    }
+}
+
+// The payload of trigger DIS at (x, y) (records spawned by switch_activate(dis) when a wizard flies over it).
+void place_payload(Placer &P, int kind, int band, int x, int y, uint16_t dis) {
+    switch (kind) {
+    case WTRIG_MANA: {
+        const int n = 8 + 4 * band + P.rng.below(5);
+        for (int i = 0; i < n; i++) { const Cell c = P.scatter(x, y, 3); P.add(10, 0x27, c.x, c.y, dis, 0, dis); }
+        break;
+    }
+    case WTRIG_AMBUSH: {
+        const int grade = 1 + band * 2 + P.rng.below(2);
+        for (int i = 0; i < 2; i++) place_pack(P, grade, x + P.rng.range(-6, 6), y + P.rng.range(-6, 6), dis);
+        break;
+    }
+    case WTRIG_EARTHQUAKE: P.add(10, 15, x, y, dis, 0, dis); break;
+    case WTRIG_VOLCANO: P.add(10, 9, x + P.rng.range(-6, 6), y + P.rng.range(-6, 6), dis, 0, dis); break;
+    case WTRIG_STORM:
+        for (int i = 0; i < 3 + band; i++) P.add(10, 23, x + P.rng.range(-5, 5), y + P.rng.range(-5, 5), dis, 0, dis);
+        for (int i = 0; i < 2 + band; i++) P.add(10, 17, x + P.rng.range(-5, 5), y + P.rng.range(-5, 5), dis, 0, dis);
+        break;
+    case WTRIG_CRATERS:
+        for (int i = 0; i < 3; i++) P.add(10, 11, x + P.rng.range(-8, 8), y + P.rng.range(-8, 8), dis, 0, dis);
+        break;
+    case WTRIG_ELITE: {
+        static const uint8_t elite[3] = {16, 11, 0};    // a wyvern, a genie or a dragon (round 13 adds affixes)
+        P.add(5, elite[P.rng.below(3)], x, y, dis, 0, dis);
+        break;
+    }
+    case WTRIG_URN: {
+        // a spell the template allows player 0 (+0x74) that is not a start spell (+0x10)
+        int cand[24], n = 0;
+        for (int i = 0; i < 24; i++)
+            if (P.level->player_block[0][0x74 + i] == 1 && P.level->player_block[0][0x10 + i] == 0) cand[n++] = i;
+        if (n) P.add(12, (uint16_t)cand[P.rng.below(n)], x, y, dis, 0, 0);
+        else   P.add(10, 0x27, x, y, dis, 0, dis);
+        break;
+    }
+    default: break;
+    }
+}
+
+int pick_payload(Placer &P, int band) {
+    int total = 0;
+    for (const PayloadWeight &w : kPayloads) total += w.w[band];
+    int r = P.rng.below(total);
+    for (const PayloadWeight &w : kPayloads) { if (r < w.w[band]) return w.kind; r -= w.w[band]; }
+    return WTRIG_MANA;
+}
+
+// ---- seats -------------------------------------------------------------------------------------------------
+int water_cells(int x, int y) {
+    int n = 0;
+    for (int dy = -kPlateauHalf; dy < kPlateauHalf; dy++)
+        for (int dx = -kPlateauHalf; dx < kPlateauHalf; dx++)
+            n += g_map_height[world_cell(x + dx, y + dy)] == 0;
+    return n;
+}
+
+void choose_seats(Placer &P, int seats_wanted) {
+    const int n = g_world.size, bucket = std::max(n / 32, 1);
+    const int g = group_order(P.out.symmetry);
+    if (g > 1) {
+        int best = -(1 << 30);
+        Cell best_orb[8] = {};
+        for (int t = 0; t < 160; t++) {
+            Cell orb[8];
+            orbit(P.out.symmetry, P.rng.below(n), P.rng.below(n), orb);
+            int m = 1 << 30;
+            for (int i = 0; i < g; i++)
+                for (int j = 0; j < i; j++) m = std::min(m, cell_dist(orb[i].x, orb[i].y, orb[j].x, orb[j].y));
+            const int score = (m / bucket) * 1000 - water_cells(orb[0].x, orb[0].y);
+            if (score > best) { best = score; std::copy(orb, orb + g, best_orb); }
+        }
+        P.seats.assign(best_orb, best_orb + g);
+    } else {
+        // no symmetry: farthest-point sampling over a seeded candidate set
+        std::vector<Cell> cand(192);
+        for (Cell &c : cand) c = Cell{P.rng.below(n), P.rng.below(n)};
+        for (int s = 0; s < seats_wanted; s++) {
+            int best = -(1 << 30), bi = 0;
+            for (int i = 0; i < (int)cand.size(); i++) {
+                int m = n;
+                for (const Cell &c : P.seats) m = std::min(m, cell_dist(cand[i].x, cand[i].y, c.x, c.y));
+                const int score = (m / bucket) * 1000 - water_cells(cand[i].x, cand[i].y);
+                if (score > best) { best = score; bi = i; }
+            }
+            P.seats.push_back(cand[(size_t)bi]);
+        }
+    }
+    int m = n;
+    for (size_t i = 0; i < P.seats.size(); i++)
+        for (size_t j = 0; j < i; j++)
+            m = std::min(m, cell_dist(P.seats[i].x, P.seats[i].y, P.seats[j].x, P.seats[j].y));
+    P.voronoi = std::max(P.seats.size() > 1 ? m / 2 : n / 2, 16);
+}
+
+// The plateau: the 24 x 24 block at one height (its average, kept on land), a 12-cell ring blended into the terrain.
+void flatten_plateaus(const std::vector<Cell> &seats) {
+    // the same height for every seat (fairness): the mean of the seats' averages
+    int64_t sum = 0;
+    for (const Cell &c : seats)
+        for (int dy = -kPlateauHalf; dy < kPlateauHalf; dy++)
+            for (int dx = -kPlateauHalf; dx < kPlateauHalf; dx++)
+                sum += g_map_height[world_cell(c.x + dx, c.y + dy)];
+    const int h = std::clamp((int)(sum / (int64_t)(seats.size() * 4 * kPlateauHalf * kPlateauHalf)), 0x28, 0x90);
+    const int r = kPlateauHalf + kRamp;
+    for (const Cell &c : seats)
+        for (int dy = -r; dy < r; dy++)
+            for (int dx = -r; dx < r; dx++) {
+                uint8_t &v = g_map_height[world_cell(c.x + dx, c.y + dy)];
+                const int d = std::max(std::max(dx < 0 ? -dx - 1 : dx, dy < 0 ? -dy - 1 : dy) - (kPlateauHalf - 1), 0);
+                if (d == 0) v = (uint8_t)h;
+                else v = (uint8_t)((v * d + h * (kRamp + 1 - d)) / (kRamp + 1));
+            }
+}
+
+void place_rivers(Placer &P, const GenMap &gen) {
+    terrain_rivers_begin_world();
+    const int prot = kPlateauHalf + kRamp + 2;
+    for (const Cell &c : P.seats)
+        for (int dy = -prot; dy < prot; dy++)
+            for (int dx = -prot; dx < prot; dx++) g_map_type[world_cell(c.x + dx, c.y + dy)] = 0;
+    const int area = (g_world.size / 256) * (g_world.size / 256);
+    const int g = group_order(P.out.symmetry);
+    int count = std::max(gen.river, 0) * area / g;
+    int tries = 1000 * area;
+    while (count > 0 && tries > 0) {
+        --tries;
+        const int x = P.rng.below(g_world.size), y = P.rng.below(g_world.size);
+        const uint32_t c = world_cell(x, y);
+        if (g_map_height[c] <= (uint8_t)gen.sourc || g_map_flags[c] == 0 || g_map_type[c] == 0) continue;
+        Cell orb[8];
+        const int n = orbit(P.out.symmetry, x, y, orb);
+        for (int i = 0; i < n; i++) terrain_trace_river_world(world_cell(orb[i].x, orb[i].y));
+        --count;
+    }
+    terrain_rivers_end_world();
+}
+
+// ---- the features (after the class passes) ------------------------------------------------------------------
+void place_features(Placer &P, int players) {
+    const WorldGenSettings &s = P.s;
+    const int area = (g_world.size / 256) * (g_world.size / 256);
+    const int g = group_order(P.out.symmetry);
+    const int seats = (int)P.seats.size();
+    Cell orb[8];
+    int n = 0;
+
+    // seats: the start positions of the players (Flyer1..8 records), the other seats stay empty
+    for (int i = 0; i < seats; i++) {
+        P.feature(WFEAT_SPAWN, (uint8_t)i, P.seats[(size_t)i].x, P.seats[(size_t)i].y);
+        if (i < players) P.add(3, (uint16_t)(4 + i), P.seats[(size_t)i].x, P.seats[(size_t)i].y);
+    }
+    // per-seat counts become orbit counts (an orbit gives every seat one); without symmetry, per player
+    auto orbits_for = [&](int per_seat) { return g > 1 ? per_seat : per_seat * seats; };
+
+    // portals: linked pairs, one end in the seat's region, the other at least a quarter of the world away
+    for (int k = 0; k < orbits_for(s.portals); k++) {
+        if (!P.pick_orbit(40, 80, 10, true, orb, &n)) continue;
+        for (int i = 0; i < n; i++) {
+            Cell far{};
+            bool found = false;
+            for (int t = 0; t < 64 && !found; t++) {
+                far = Cell{P.rng.below(g_world.size), P.rng.below(g_world.size)};
+                found = P.land(far.x, far.y) && P.band_pct(far.x, far.y) >= 60 &&
+                        cell_dist(far.x, far.y, orb[i].x, orb[i].y) >= g_world.size / 4 && !P.near_feature(far.x, far.y, 10);
+            }
+            if (!found || P.free_records() < 2) continue;
+            const uint16_t a = (uint16_t)P.out.features.size();
+            P.feature(WFEAT_PORTAL, (uint8_t)k, orb[i].x, orb[i].y, (uint16_t)(a + 1));
+            P.feature(WFEAT_PORTAL, (uint8_t)k, far.x, far.y, a);
+            // the destination is 3 cells beside the other gate (arriving on it would bounce straight back)
+            P.add(10, 0x22, orb[i].x, orb[i].y, 0, 0, 0, (uint16_t)world_wrap_cell(far.y + 3), (uint16_t)world_wrap_cell(far.x + 3));
+            P.add(10, 0x22, far.x, far.y, 0, 0, 0, (uint16_t)world_wrap_cell(orb[i].y + 3), (uint16_t)world_wrap_cell(orb[i].x + 3));
+        }
+    }
+
+    // a neutral town (the original's villager castle, effect 0x2d, built during generation) per seat
+    if (P.pick_orbit(60, 95, 24, true, orb, &n))
+        for (int i = 0; i < n; i++) {
+            P.add(10, 0x2d, orb[i].x, orb[i].y, 0xffff, 0, 0xffff, (uint16_t)P.rng.range(3, 6));
+            P.feature(WFEAT_TOWN, 0, orb[i].x, orb[i].y);
+        }
+
+    // mana springs: a blob of balls; bands safe / contested / rich
+    for (int k = 0; k < orbits_for(s.springs); k++) {
+        const int band = k % 3;
+        const int lo = band == 0 ? 30 : (band == 1 ? 65 : 95), hi = band == 0 ? 55 : (band == 1 ? 95 : 160);
+        if (!P.pick_orbit(lo, hi, 16, true, orb, &n)) continue;
+        for (int i = 0; i < n; i++) {
+            P.feature(WFEAT_SPRING, (uint8_t)(band + 1), orb[i].x, orb[i].y);
+            const int balls = 8 + band * 6;
+            for (int b = 0; b < balls; b++) { const Cell c = P.scatter(orb[i].x, orb[i].y, 3); P.add(10, 0x27, c.x, c.y); }
+        }
+    }
+
+    // trigger areas: a hidden one-shot switch (type 0, "hidden inside": fires for a wizard flying into its box)
+    // with a payload group of its own DisId
+    for (int k = 0; k < orbits_for(s.triggers); k++) {
+        if (!P.pick_orbit(40, 150, 14, true, orb, &n)) continue;
+        const int band = band_of(P.band_pct(orb[0].x, orb[0].y));
+        const int kind = pick_payload(P, band);
+        for (int i = 0; i < n && P.next_dis < 0x7fff; i++) {
+            if (P.free_records() < 24) break;
+            const uint16_t dis = (uint16_t)P.next_dis++;
+            P.feature(WFEAT_TRIGGER, (uint8_t)kind, orb[i].x, orb[i].y, dis);
+            P.add(11, 0, orb[i].x, orb[i].y, 0, 2, dis);
+            Rng saved = P.rng;      // every seat's payload is the same group, mirrored
+            place_payload(P, kind, band, orb[i].x, orb[i].y, dis);
+            if (i + 1 < n) P.rng = saved;
+        }
+    }
+
+    // lairs: creature packs graded 1..5 by distance from the seats, Poisson-disc spaced
+    for (int k = 0; k < orbits_for(s.lairs); k++) {
+        if (!P.pick_orbit(35, 160, 20, true, orb, &n)) continue;
+        const int grade = std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 35) * 5 / 120, 1, 5);
+        const Rng saved = P.rng;
+        for (int i = 0; i < n; i++) {
+            if (P.free_records() < 16) break;
+            P.rng = saved;
+            P.feature(WFEAT_LAIR, (uint8_t)grade, orb[i].x, orb[i].y);
+            place_pack(P, grade, orb[i].x, orb[i].y, 0);
+        }
+    }
+
+    // wild creatures (single wanderers, thinned near the seats) and groves share what is left of the records
+    const int wild_orbits = s.wild_pct > 0 ? std::min(30 * area * s.wild_pct / 100, P.free_records() / 3) / g : 0;
+    for (int k = 0; k < wild_orbits; k++) {
+        if (!P.pick_orbit(45, 200, 6, true, orb, &n, 16)) continue;
+        const int grade = std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 45) * 4 / 120, 1, 4);
+        const Pack &pk = kPacks[grade - 1][P.rng.below(3)];
+        for (int i = 0; i < n; i++) P.add(5, pk.model, orb[i].x, orb[i].y);
+    }
+    const int grove_orbits = std::min(12 * area, P.free_records() / 12) / g;
+    for (int k = 0; k < grove_orbits; k++) {
+        if (!P.pick_orbit(25, 200, 8, true, orb, &n, 16)) continue;
+        const int trees = P.rng.range(5, 12);
+        const Rng saved = P.rng;
+        for (int i = 0; i < n; i++) {
+            P.rng = saved;
+            P.feature(WFEAT_TREES, 0, orb[i].x, orb[i].y);
+            for (int t = 0; t < trees; t++) {
+                const Cell c = P.scatter(orb[i].x, orb[i].y, 3);
+                P.add(2, P.rng.below(10) == 0 ? 1 : 0, c.x, c.y);       // trees, now and then a standing stone
+            }
+        }
+    }
+}
+
+} // namespace
+
+const char *worldgen_symmetry_name(int sym) {
+    static const char *const k[] = {"auto", "none", "point", "mirror", "rot4", "dihedral"};
+    return sym >= 0 && sym < WORLD_SYM_COUNT ? k[sym] : "?";
+}
+int worldgen_symmetry_parse(const char *s) {
+    for (int i = 0; i < WORLD_SYM_COUNT; i++) if (!std::strcmp(s, worldgen_symmetry_name(i))) return i;
+    return -1;
+}
+
+WorldGenSettings worldgen_settings(const ModeParams &p) {
+    const WorldParams &w = p.world;
+    WorldGenSettings s{};
+    s.size = (int)p.world_size;
+    uint32_t players = p.humans + p.bots;
+    s.players = (int)std::clamp<uint32_t>(players, 1, 8);
+    int sym = w.symmetry < WORLD_SYM_COUNT ? w.symmetry : WORLD_SYM_AUTO;
+    if (sym == WORLD_SYM_AUTO)
+        sym = s.players == 1 ? WORLD_SYM_NONE : s.players == 2 ? WORLD_SYM_POINT : s.players <= 4 ? WORLD_SYM_ROT4 : WORLD_SYM_DIHEDRAL;
+    if (group_order(sym) > 1 && group_order(sym) < s.players) sym = s.players <= 4 ? WORLD_SYM_ROT4 : WORLD_SYM_DIHEDRAL;
+    s.symmetry = sym;
+    s.roughness_pct = w.roughness ? w.roughness : 100;
+    s.water_pct = w.water ? std::min<int>(w.water, 90) : 30;
+    s.continent_pct = w.continent ? w.continent : 50;
+    s.springs = w.springs == 0xff ? 0 : (w.springs ? w.springs : 3);
+    s.wild_pct = w.wild == 0xff ? 0 : (w.wild ? std::min<int>(w.wild, 250) : 100);
+    s.lairs = w.lairs == 0xff ? 0 : (w.lairs ? w.lairs : 3);
+    const int trig = w.features & 15, port = w.features >> 4;
+    s.triggers = trig == 15 ? 0 : (trig ? trig : 3);
+    s.portals = port == 15 ? 0 : (port ? port : 1);
+    return s;
+}
+
+bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out) {
+    const WorldGenSettings s = worldgen_settings(params);
+    if (!world_set_size(s.size)) return false;
+    WorldLayout lay;
+    lay.size = s.size;
+    lay.symmetry = s.symmetry;
+    const GenMap &gen = level->gen;
+    g_rng16 = (uint16_t)gen.seed;
+    g_state->rng = (uint32_t)gen.seed;
+    const uint32_t seed = mix(params.seed ^ 0x3017d00du);
+
+    // height field
+    {
+        std::vector<int32_t> field(g_world.cells);
+        TerrainWorldGen tg;
+        tg.seed = seed;
+        tg.start_x = (int)(gen.off & 0xff) * (s.size / 256);
+        tg.start_y = (int)((gen.off >> 8) & 0xff) * (s.size / 256);
+        tg.raise = (int16_t)(uint16_t)gen.raise;
+        tg.gnarl = (int32_t)((int64_t)(uint16_t)gen.gnarl * s.roughness_pct / 100);
+        tg.coarse_pct = s.continent_pct;
+        terrain_fractal_world(field.data(), tg);
+        symmetrise(field, s.symmetry);
+        terrain_normalise_world(field.data(), s.water_pct);
+    }
+    std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
+
+    std::memset(level->things, 0, sizeof level->things);
+    Placer P(s, level, mix(seed + 1), lay);
+    choose_seats(P, s.players);
+    lay.seats = (int)P.seats.size();
+    flatten_plateaus(P.seats);
+    place_rivers(P, gen);
+    terrain_build_passes(gen);
+    place_features(P, s.players);
+    lay.records = P.nrec;
+    s_last = lay;
+    if (out) *out = lay;
+    return true;
+}
+
+const WorldLayout &worldgen_last_layout() { return s_last; }

@@ -7,6 +7,7 @@
 #include "gen/thing_tables.h"
 #include "tmaps.h"
 #include "settings.h"
+#include "mode.h"
 #include "tick_profile.h"
 #include <cstring>
 #include <vector>
@@ -131,6 +132,9 @@ static inline int32_t &active_entry(int p) {
 int thing_pool_wanted_slots() {
     int n = s_forced_slots ? s_forced_slots : g_settings.thing_slots;
     if (n < MC_THING_SLOTS) n = MC_THING_SLOTS;
+    // Phase 4 round 11: a generated world (worldgen.h) places up to 1999 records - it always runs with the
+    // extended pool (from the mode parameters every peer and replay shares, so still deterministic)
+    if (mode_active() && mode_params_generated(g_mode.params) && n < kGeneratedWorldSlots) n = kGeneratedWorldSlots;
     if (n > MC_THING_SLOTS_MAX) n = MC_THING_SLOTS_MAX;
     return n;
 }

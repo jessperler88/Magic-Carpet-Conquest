@@ -29,22 +29,48 @@ enum : uint32_t {
 constexpr int MODE_LEVEL_INDEX = 0x100;
 
 #pragma pack(push, 1)
+// The generator controls of a generated world (round 11 session 2, worldgen.h). 8 bytes in ModeParams (where
+// round 10 had reserved zeros): 0 in a field = its default, so older movies / save states read as the defaults.
+struct WorldParams {
+    uint8_t symmetry = 0;       // WORLD_SYM_*; 0 = from the player count (worldgen.h)
+    uint8_t roughness = 0;      // % of the template's gnarl (second noise amplitude), 1..255; 0 = 100
+    uint8_t water = 0;          // % of the cells below sea level, 1..90; 0 = 30 (the original's "field < 0" drowns
+                                // whole worlds once the continent levels shift the field)
+    uint8_t continent = 0;      // amplitude of the levels above 128 cells, % of the 128-cell level; 0 = 50
+    uint8_t springs = 0;        // mana springs per player; 0 = 3, 0xff = none
+    uint8_t wild = 0;           // wild creature density in %, 1..250; 0 = 100, 0xff = none
+    uint8_t lairs = 0;          // creature lairs per player (graded 1-5 by distance); 0 = 3, 0xff = none
+    uint8_t features = 0;       // low nibble: trigger areas per player (0 = 3, 15 = none);
+                                // high nibble: portal pairs per player (0 = 1, 15 = none)
+};
+static_assert(sizeof(WorldParams) == 8);
+
 // What a mode run was started with. Exchanged in the lobby / written into movies and save states as is.
 struct ModeParams {
     uint32_t seed = 0;          // match seed: the level generator and ModeRng derive from it
-    uint32_t world_size = 256;  // cells per side (256 only until round 11)
+    uint32_t world_size = 256;  // cells per side, a power of two 256..4096 (world.h)
     uint32_t bots = 0;          // computer wizards besides the human players
     uint32_t humans = 1;        // human players (1 offline)
     uint32_t flags = 0;         // MODE_PARAM_* bits
     uint32_t map = 0;           // template level (50..69, the multiplayer maps); 0 = chosen from the seed
-    uint32_t reserved[2] = {};
+    WorldParams world;          // generator controls (round 11 session 2)
 };
 static_assert(sizeof(ModeParams) == 32);
 
 enum : uint32_t {
     MODE_PARAM_DEBUG = 1u << 0,         // debug commands (packets 0x40.., debug_cmd.h) accepted in this run
     MODE_PARAM_RESEED = 1u << 1,        // the template's terrain generator is re-seeded from the seed (else its own)
+    MODE_PARAM_TILED = 1u << 2,         // world_size > 256: the template level tiled (world_widen_tiled, the round 11
+                                        // session 1 test bed) instead of a generated world
+    MODE_PARAM_GENERATE = 1u << 3,      // world_size 256: a generated world instead of the template level
 };
+// The Thing pool of a generated world is at least this big (thing.cpp thing_pool_wanted_slots).
+constexpr int kGeneratedWorldSlots = 8192;
+// A generated world (worldgen.h) instead of the template level.
+inline bool mode_params_generated(const ModeParams &p) {
+    if (p.world_size > 256) return !(p.flags & MODE_PARAM_TILED);
+    return (p.flags & MODE_PARAM_GENERATE) != 0;
+}
 
 // Per player state of the mode (index = player record 0..7).
 struct ModePlayer {

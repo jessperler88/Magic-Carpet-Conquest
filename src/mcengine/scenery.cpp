@@ -4,6 +4,7 @@
 // Report: docs/analysis/port_castle.md.
 #include "scenery.h"
 #include "mc_math.h"
+#include "mode.h"
 #include <cstring>
 
 // ---- class 2: scenery ------------------------------------------------------------------------------
@@ -95,9 +96,12 @@ static inline unsigned switch_id(const Thing *t) { return (unsigned)(int32_t)(in
 // switch_test_player_4a8b0
 int switch_test_player(Thing *sw, int want) {
     if (sw->tick & 7) return 0;
+    // port (Phase 4 round 11): in a mode run computer wizards (type 1) fire switches too - the generated world's
+    // trigger areas are for every wizard, bots included. The original: human flyers (type 0) only.
+    const int max_type = mode_active() ? 1 : 0;
     for (uint32_t i = g_cfg->player_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
         Thing *p = thing_at(i);
-        if (p->type != 0) continue;
+        if (p->type > max_type) continue;
         if (thing_collide(sw, p) != want) continue;
         sound_request((int16_t)i, -1, 0x29);
         return 1;

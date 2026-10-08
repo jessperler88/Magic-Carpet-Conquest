@@ -194,7 +194,8 @@ teleport in byte 9) / sound / save-state `WRLD` chunk / movie v3 wide snapshots 
 min(N/2, 256)`, draw distance up to 255 at N >= 512) / HUD / map screen (window around the player) / debug overlays.
 `mcport rts --size 512..4096` runs a **tiled** world (the template map repeated) until the generator lands; two
 runs at 1024 give identical checksums. Sizes are powers of two only (768 dropped: masks everywhere).
-Session 2: B4 + B5 (generator on N, feature placer, `WorldParams`). Session 3: B6 wake-near-any-wizard, `world_test`
+**Session 2 DONE 2026-10-08** (66/66 ctest, references identical; report `docs/analysis/port_world_gen.md`):
+`rts --size N` builds a generated, symmetric world with features, triggers and portals (B4 + B5 below). Session 3: B6 wake-near-any-wizard, `world_test`
 / `MC_REF_WORLD`, two-process sync at 1024, the gate, plus the open design points the sweep listed (fixed-range
 constants that do not scale: sound cull, tether, teleport gate 128 cells, spiral search 15 rings; world-wide
 searches such as skeletons -> nearest enemy castle; castle-site quadrants growing with N; rivers / source tries
@@ -212,11 +213,20 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
 - [x] B3 original-layout images (`mc_image.h`: `ThingImage` / `GameStateImage`, `state_to_image` / `_from_image`,
       `state_image_read` for the original's over-reads); movies, save states, checksum and `reference_test` go
       through them; every gate re-validated (session 1: 65/65, all reference sets identical).
-- [ ] B4 generator on N: int32 fractal scratch (or seeded coarse lattice, which doubles as a "continent scale"
-      slider), k levels, river / 1000-tries constants scaled, local passes through the accessors;
-      `terrain_build(const GenMap&, const WorldParams&)`. Session 1 did the local passes (task A); the fractal,
-      the normalisation and the river source pick are still 256-only and `terrain_build` refuses N > 256.
-- [ ] B5 **seeded feature placer v1** (`worldgen.cpp`, new): symmetry (point / mirror on the torus) chosen from
+- [x] B4 generator on N (session 2, `docs/analysis/port_world_gen.md`): int32 torus diamond-square with log2 N
+      levels, the original's amplitudes up to step 128 and a capped "continent" amplitude above (`--continent`),
+      symmetrised by a variance-corrected group average, sea level by percentile (`--water`, default 30 %), rivers
+      scaled by area and sourced in orbits with a visited-list tracer, then the original's passes
+      (`terrain_build_passes`, shared with `terrain_build`). `terrain_build` itself stays the 256 level builder.
+- [x] B5 **seeded feature placer v1** (session 2, `worldgen.{h,cpp}`, `port_world_gen.md`): seats by symmetry orbit
+      (auto: 1 none, 2 point, 3-4 rot4, 5-8 dihedral; `--symmetry`), plateaus, springs in bands, towns, graded lairs,
+      wild creatures, groves, trigger areas (8 payload types, all fire for bots - switches now fire for computer
+      wizards in a mode run) and linked portal pairs, as THING_INIT records (budget 1999); `WorldParams` (8 bytes in
+      `ModeParams`, 0 = default) carried by movies / save states / the mode checksum; extended pool (>= 8192) for
+      generated worlds. **Not done** (listed in the report): lava thresholds, flood-fill connectivity (a carpet flies;
+      walkers' reachability only matters once units have orders - round 15), day length / blight (rounds 13 / 21),
+      lobby exchange (round 12), re-arming / visible triggers and payload weights as parameters. Original text:
+      seeded feature placer v1 (`worldgen.cpp`, new): symmetry (point / mirror on the torus) chosen from
       the player count; spawns first, each on a flattened 24x24 plateau; mana springs in distance bands (safe /
       contested / rich), wild lairs Poisson-disc graded 1-5 by distance; towns, trees, water and lava
       thresholds, flood-fill connectivity with carve-or-reroll; `WorldParams` = seed, size, players, symmetry,
@@ -521,7 +531,7 @@ display resolution), and the user expects to want it eventually. Until then ever
 | round | theme | days | depends on |
 |---|---|---|---|
 | 10 | debug suite + mode skeleton + movie v3 (**done 2026-10-08**) | 8-10 | - |
-| 11 | world module, int32 positions, generator, placer (**session 1 of 3 done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
+| 11 | world module, int32 positions, generator, placer (**sessions 1-2 of 3 done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
 | 12 | menu urn, setup screen, lobby, rules v1, bots v1 | 8-12 | 11 |
 | 13 | plates, numbers, elites, drops, levels | 8-10 | 10 (hook, overlay); 11 (lairs) |
 | 14 | resources, buildings, gatherers, growth, upkeep | 12-16 | 12 |
@@ -557,20 +567,20 @@ the CPU path is the limit.
 
 ---
 
-## 6. Next session: round 11 session 2 (generator on N + feature placer)
+## 6. Next session: round 11 session 3 (wake rule, world tests, sync at 1024, the gate)
 
-Work continues on branch `round11` (session 1: commits `b8cf714`, `f724143`, `acb4880`). Read
-`docs/port/BRIEFING_round11.md` and the five `docs/analysis/port_world_*.md` reports, then add a session-2 section to
-the briefing:
-- **B4**: height field for N > 256 (int32 scratch or a seeded coarse lattice under the unchanged 8-level fractal),
-  normalisation, river sources over the whole world with counts / tries scaled by area; lift the `terrain_build`
-  guard; the local passes already run on any N.
-- **B5**: `worldgen.cpp` feature placer and `WorldParams` (seed, size, players, symmetry, roughness, water, springs,
-  wild density, lair grades, day length, blight), carried by `ModeParams` / movies / save states / `NetGameRules`;
-  replaces the `world_widen_tiled` call in `mode_level.cpp`'s level-start hook. Include the **trigger areas** (switch
-  Things with mana / ambush / earthquake / volcano / storm payloads, firing for any wizard incl. bots) and the
-  linked **teleport portals** listed under B5 - first read how the original's switch types detect who flies over
-  them and how effect 0x22 picks its destination.
-- `mcport rts --size N` on a generated world; screenshots of the result looked at.
-- Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2` (the user's machine maxed out with five
-  full-parallel builds in session 1).
+Work continues on branch `round11` (session 1: `b8cf714`, `f724143`, `acb4880`; session 2: the "Round 11 session 2"
+commit). Read `docs/port/BRIEFING_round11.md` (session 2 section), `docs/analysis/port_world_gen.md` and the five
+`port_world_*.md` reports, then:
+- **B6**: creatures wake near **any** wizard under the mode flag (deterministic; today the local player only, and off
+  in network games - in a generated 1024 world most lairs would sleep forever). Check the AI wizards' own searches
+  over the bigger world (targets, castle sites, mana) with a few bot-vs-bot headless runs.
+- **B9**: `world_test` (256 through the new code == the original arrays for all 69 levels, overflow probes at 500
+  cells), `MC_REF_WORLD`, `render_ext_test` at 1024 dd 127 / 255.
+- Two-process lockstep (`net_test` parts 2-3 pattern) on `rts --size 1024 --bots 3` for 2000 ticks; the ModeParams
+  (with `WorldParams`) must travel with the network rules until round 12's lobby does it.
+- The scaling decisions listed under session 3 above (sound cull, tether, spiral rings, skeleton targets, castle-site
+  quadrants, rivers / tries - done for the generator) and `draw_distance` up to 255 in config / pause menu.
+- Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` plays, two instances stay in sync, the free camera flies the
+  whole world.
+- Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2`.

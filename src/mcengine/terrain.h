@@ -28,6 +28,30 @@ void terrain_assign_textures();                                            // 30
 void terrain_mark_water_anim();                                            // 30690
 void terrain_build_lightmap();                                             // 31310
 
+// The passes of terrain_build after the rivers (flatten water quads .. light map), in the original's order.
+void terrain_build_passes(const GenMap &gen);
+
+// ---- round 11 session 2 (B4): a generated N-cell world (port-only, driven by worldgen.cpp) ----------------
+struct TerrainWorldGen {
+    uint32_t seed = 0;          // the field's own LCG (g_rng16 is not touched, like the original's fractal)
+    int      start_x = 0, start_y = 0;   // the seeded lattice point (the original's OFF)
+    int32_t  raise = 0;         // its value (the original's RAISE)
+    int32_t  gnarl = 0;         // second noise amplitude (the original's GNARL), 0..0x7ffe
+    int32_t  coarse_pct = 50;   // amplitude of the levels above step 128 in % of the step-128 level (4096)
+};
+// Torus diamond-square over N x N int32 cells (FIELD has g_world.cells entries): levels step N/2 .. 1, the
+// original's square-then-diamond order per level; the noise per level is the original's step * 32 up to step
+// 128 and coarse_pct % of 4096 above, so a wide world keeps the campaign's local relief and gains continents.
+void terrain_fractal_world(int32_t *field, const TerrainWorldGen &p);
+// FIELD -> g_map_height 0..0xc4: the maximum maps to 0xc4; sea level = 0 (the original's rule) for
+// water_pct 0, else the value below which water_pct % of the cells lie.
+void terrain_normalise_world(const int32_t *field, int water_pct);
+// Rivers on any N: begin (classes from the heights, all cells unvisited), trace from chosen sources (false =
+// the source is protected: g_map_type 0 set by the caller), end (g_map_type := 0xff as the original).
+void terrain_rivers_begin_world();
+bool terrain_trace_river_world(uint32_t cell);
+void terrain_rivers_end_world();
+
 // terrain_sample_height_71e00: height at a world position interpolated over the quad's triangle
 // (height byte * 0x20 scale).
 int terrain_sample_height(int32_t x, int32_t y);   // round 11: world coordinates (world.h)

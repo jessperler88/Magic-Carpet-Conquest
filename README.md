@@ -145,12 +145,20 @@ extension and a custom Watcom calling-convention spec (`x86watcom.cspec`),
 Python 3.13 (`propack`, `pillow`, `pyghidra`), vcpkg with `sdl2:x64-windows`,
 Visual Studio 18 Build Tools, CMake 4.3.
 
-## Where things stand (2026-10-08, Conquest round 11 session 1 - branch `round11`)
+## Where things stand (2026-10-08, Conquest round 11 session 2 - branch `round11`)
 
+- **Generated worlds** (`src/mcengine/worldgen.h`): `mcport <dir> rts --size 1024 --bots 3` builds a seeded
+  1024-cell world (512 .. 4096; `--generate` for a generated 256 world, `--tiled` for the old tiled test bed): a torus
+  fractal with the campaign's local relief plus continent-scale levels, symmetric for fairness (point / mirror / 90°
+  / dihedral, from the player count or `--symmetry`), a sea level (`--water %`), rivers, a flattened plateau per
+  seat, and the original's own Things placed as features - mana springs, neutral towns, creature lairs graded 1-5 by
+  distance, wild creatures, groves, linked **teleport portal pairs** and hidden **trigger areas** (mana, ambush,
+  earthquake, volcano, storm, craters, an elite, a spell) that fire for any wizard, computer wizards included.
+  Controls: `--rough % --continent % --springs N --wild % --lairs N --triggers N --portals N` (`none` for the counts).
+  1024 builds in ~0.15 s, 2048 in ~1 s. 66 ctest tests, every reference set still identical.
 - Positions are 32-bit and the world size is a run-time parameter (256 .. 4096 cells, `src/mcengine/world.h`); the
   original game runs through the same code and stays byte-identical to the original (all reference sets).
-  `mcport <dir> rts --size 1024` plays a tiled 1024-cell world until the world generator arrives (session 2).
-  65 ctest tests. Plan: `docs/ROADMAP_PHASE4.md` round 11.
+  Plan: `docs/ROADMAP_PHASE4.md` round 11 (session 3: wake-near-any-wizard, world tests, two-instance sync).
 
 ## Before that (2026-10-08, Hidden Worlds)
 

@@ -105,7 +105,7 @@ endfunction()
 # ${MC_SIM_CORE} plus the sources of the subsystem under test.
 set(MC_SIM_CORE mcengine/thing.cpp mcengine/terrain_gen.cpp mcengine/terrain_paint.cpp mcengine/spatial.cpp
     mcengine/level_features.cpp mcengine/constructors.cpp mcengine/player.cpp mcengine/demo.cpp mcengine/sim.cpp
-    mcengine/text.cpp mcengine/palette_fx.cpp mcengine/net.cpp)
+    mcengine/text.cpp mcengine/palette_fx.cpp mcengine/net.cpp mcengine/worldgen.cpp)
 # The whole simulation without the renderer: the core plus every gameplay subsystem (sim_register_gameplay).
 set(MC_SIM_ALL ${MC_SIM_CORE} mcengine/sim_all.cpp mcengine/effects.cpp mcengine/projectiles.cpp mcengine/spells.cpp
     mcengine/castle.cpp mcengine/scenery.cpp mcengine/creature_common.cpp mcengine/creatures.cpp mcengine/input.cpp

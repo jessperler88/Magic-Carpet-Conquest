@@ -3,6 +3,8 @@
 #include "rts_run.h"
 #include "mode_level.h"
 #include "mode_dump.h"
+#include "worldgen.h"
+#include <algorithm>
 #include "game.h"
 #include "mclog.h"
 #include <cstdio>
@@ -101,6 +103,40 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
         else if (!std::strcmp(a, "--bots")) { if (!value(&p.bots)) return false; }
         else if (!std::strcmp(a, "--map")) { if (!value(&p.map)) return false; }
         else if (!std::strcmp(a, "--reseed")) p.flags |= MODE_PARAM_RESEED;
+        else if (!std::strcmp(a, "--tiled")) p.flags |= MODE_PARAM_TILED;
+        else if (!std::strcmp(a, "--generate")) p.flags |= MODE_PARAM_GENERATE;
+        else if (!std::strcmp(a, "--symmetry")) {
+            if (i + 1 >= argc) { *err = "--symmetry needs auto|none|point|mirror|rot4|dihedral"; return false; }
+            const int s = worldgen_symmetry_parse(argv[++i]);
+            if (s < 0) { *err = std::string("--symmetry: unknown ") + argv[i]; return false; }
+            p.world.symmetry = (uint8_t)s;
+        }
+        // generator controls (WorldParams, mode.h): 0 = the default; for the counts "none" = 0xff / 15
+        else if (!std::strcmp(a, "--rough") || !std::strcmp(a, "--water") || !std::strcmp(a, "--continent") ||
+                 !std::strcmp(a, "--springs") || !std::strcmp(a, "--wild") || !std::strcmp(a, "--lairs") ||
+                 !std::strcmp(a, "--triggers") || !std::strcmp(a, "--portals")) {
+            if (i + 1 < argc && !std::strcmp(argv[i + 1], "none")) {
+                i++;
+                if (!std::strcmp(a, "--springs")) p.world.springs = 0xff;
+                else if (!std::strcmp(a, "--wild")) p.world.wild = 0xff;
+                else if (!std::strcmp(a, "--lairs")) p.world.lairs = 0xff;
+                else if (!std::strcmp(a, "--triggers")) p.world.features = (uint8_t)((p.world.features & 0xf0) | 15);
+                else if (!std::strcmp(a, "--portals")) p.world.features = (uint8_t)((p.world.features & 0x0f) | 0xf0);
+                else { *err = std::string(a) + " takes a number"; return false; }
+                continue;
+            }
+            if (!value(&v)) return false;
+            const bool nibble = !std::strcmp(a, "--triggers") || !std::strcmp(a, "--portals");
+            if (v < 1 || v > (nibble ? 14u : 250u)) { *err = std::string(a) + (nibble ? " takes 1..14 or none" : " takes 1..250"); return false; }
+            if (!std::strcmp(a, "--rough")) p.world.roughness = (uint8_t)v;
+            else if (!std::strcmp(a, "--water")) p.world.water = (uint8_t)std::min(v, 90u);
+            else if (!std::strcmp(a, "--continent")) p.world.continent = (uint8_t)v;
+            else if (!std::strcmp(a, "--springs")) p.world.springs = (uint8_t)v;
+            else if (!std::strcmp(a, "--wild")) p.world.wild = (uint8_t)v;
+            else if (!std::strcmp(a, "--lairs")) p.world.lairs = (uint8_t)v;
+            else if (!std::strcmp(a, "--triggers")) p.world.features = (uint8_t)((p.world.features & 0xf0) | v);
+            else p.world.features = (uint8_t)((p.world.features & 0x0f) | (v << 4));
+        }
         else if (!std::strcmp(a, "--debug")) p.flags |= MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--no-debug")) p.flags &= ~MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--ticks")) { if (!value(&v)) return false; s_quit_after = (long)v; }
@@ -112,7 +148,7 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
         }
         else { *err = std::string("unknown rts option ") + a; return false; }
     }
-    // round 11: 256 .. 4096, a power of two; > 256 = the template map tiled (mode_level.h) until session 2
+    // round 11: 256 .. 4096, a power of two; > 256 = a generated world (worldgen.h; --tiled: the template repeated)
     if (p.world_size < 256 || p.world_size > 4096 || (p.world_size & (p.world_size - 1))) {
         *err = "--size takes a power of two 256..4096";
         return false;
@@ -133,6 +169,17 @@ bool rts_begin(const char *game_dir, const ModeParams &params) {
     mclog(MCLOG_INFO, "rts: mode %s seed %u size %u bots %u map %u%s%s", mode_name(g_mode.mode), (unsigned)params.seed,
           (unsigned)params.world_size, (unsigned)params.bots, (unsigned)g_mode.template_level,
           (params.flags & MODE_PARAM_RESEED) ? " (reseeded)" : "", (params.flags & MODE_PARAM_DEBUG) ? " debug" : "");
+    if (mode_params_generated(params)) {
+        const WorldLayout &L = worldgen_last_layout();
+        int count[16] = {};
+        for (const WorldFeature &f : L.features) count[f.kind & 15]++;
+        mclog(MCLOG_INFO, "rts: generated world %d cells, symmetry %s, %d seats, %d records%s: %d springs, %d lairs, "
+              "%d trigger areas, %d portal pairs, %d towns, %d groves", L.size, worldgen_symmetry_name(L.symmetry), L.seats,
+              L.records, L.records_dropped ? " (some features dropped: record budget)" : "", count[WFEAT_SPRING],
+              count[WFEAT_LAIR], count[WFEAT_TRIGGER], count[WFEAT_PORTAL] / 2, count[WFEAT_TOWN], count[WFEAT_TREES]);
+        for (const WorldFeature &f : L.features)
+            if (f.kind == WFEAT_SPAWN) mclog(MCLOG_INFO, "rts: seat %d at cell %d,%d", f.grade, f.x, f.y);
+    }
     if (dump_enabled())
         mclog(MCLOG_INFO, "rts: dumps every %ld ticks%s into %s", s_dump_every, s_dump_final ? " + final" : "",
               s_dump_dir.empty() ? "the current directory" : s_dump_dir.c_str());

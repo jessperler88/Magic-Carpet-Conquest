@@ -8,8 +8,9 @@
 // textures, water animation, light map, snow) address cells through world.h and run over g_world.cells,
 // so they work on any N x N torus (identical at N = 256). The fractal fill, terrain_generate's
 // normalisation and the river source pick stay the original's 256-cell code (MC_MAP_CELLS, 8-bit
-// coordinates, `rng % 0xffff`); session 2 (B4) replaces them for N > 256, and terrain_build refuses a
-// wider world until then.
+// coordinates, `rng % 0xffff`) and terrain_build refuses a wider world. Session 2 (B4): a generated world
+// (worldgen.cpp) uses the *_world functions at the end of this file for the height field and the rivers, then
+// terrain_build_passes (the original's tail, unchanged).
 // During generation the low 3 bits of g_map_flags hold the terrain *class* (0 water, 1 cliff edge,
 // 2 interior lowland, 3 flat land, 4 transition, 5 default land, 6 steep), bit 3 is the water
 // animation flag and bits 4-6 the texture rotation code written by terrain_assign_textures.
@@ -19,8 +20,10 @@
 #include "world_set.h"
 #include "world.h"
 #include "gen/terrain_tables.h"
+#include <climits>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 // DAT_000b58b0: compact corner-class -> {texture, rotation} table, index = c0*0x157 + c1*0x31 + c2*7 + c3.
 uint8_t g_corner_tex_table[2401][2];
@@ -552,6 +555,13 @@ void terrain_build(const GenMap &gen) {
     terrain_generate();
     std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
     terrain_carve_rivers(gen.river, (uint16_t)gen.sourc);
+    terrain_build_passes(gen);
+}
+
+// The tail of terrain_build_303f0 after the rivers: classification, clean-up, textures, water animation and the
+// light map (port: shared with the generated world of worldgen.cpp; the original's order, g_rng16 continues from
+// the river pick).
+void terrain_build_passes(const GenMap &gen) {
     terrain_flatten_water_quads();
     terrain_classify_flat((uint16_t)gen.snflt);
     terrain_mark_lowland((uint16_t)gen.bhlin, (uint16_t)gen.bhflt);
@@ -567,6 +577,110 @@ void terrain_build(const GenMap &gen) {
     terrain_mark_water_anim();
     terrain_build_lightmap();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Round 11 session 2 (B4): the height field and the rivers of a generated N-cell world (port-only; worldgen.cpp
+// drives them, terrain_build_passes does the rest). Nothing here runs for a campaign level.
+
+void terrain_fractal_world(int32_t *field, const TerrainWorldGen &p) {
+    const int n = g_world.size;
+    std::memset(field, 0, sizeof(int32_t) * g_world.cells);
+    uint32_t rng = p.seed * 0x9e3779b1u + 0x7f4a7c15u;
+    const int32_t gnarl = p.gnarl < 0 ? 0 : (p.gnarl > 0x7ffe ? 0x7ffe : p.gnarl);
+    const int32_t coarse = (int32_t)((int64_t)128 * 32 * (p.coarse_pct < 0 ? 0 : p.coarse_pct) / 100);
+    // the original's noise term per level (step * 32: 4096 at step 128) and the capped one above step 128
+    auto noise = [&](int64_t avg, int s) -> int32_t {
+        rng = rng * 1664525u + 1013904223u;
+        const uint32_t r = rng >> 8;                                   // 24 bits
+        const int32_t a = s <= 128 ? s * 32 : coarse;
+        int64_t v = avg - a + (int64_t)(r % (uint32_t)(2 * a + 1)) - gnarl + (int64_t)(r % (uint32_t)(2 * gnarl + 1));
+        return (int32_t)v;
+    };
+    auto at = [&](int x, int y) -> int32_t & { return field[world_cell(x, y)]; };
+    at(p.start_x, p.start_y) = p.raise;
+    for (int s = n / 2; s >= 1; s >>= 1) {
+        const int s2 = 2 * s, count = n / s2;
+        for (int r = 0; r < count; r++)
+            for (int c = 0; c < count; c++) {
+                const int x = p.start_x + c * s2, y = p.start_y + r * s2;
+                const int64_t sum = (int64_t)at(x, y) + at(x + s2, y) + at(x + s2, y + s2) + at(x, y + s2);
+                at(x + s, y + s) = noise(sum >> 2, s);
+            }
+        for (int r = 0; r < count; r++)
+            for (int c = 0; c < count; c++) {
+                const int x = p.start_x + c * s2, y = p.start_y + r * s2;
+                const int64_t o = at(x, y);
+                at(x + s, y) = noise((o + at(x + s, y - s) + at(x + s2, y) + at(x + s, y + s)) >> 2, s);
+                at(x, y + s) = noise((at(x + s, y + s) + o + at(x - s, y + s) + at(x, y + s2)) >> 2, s);
+            }
+    }
+}
+
+void terrain_normalise_world(const int32_t *field, int water_pct) {
+    const uint32_t cells = g_world.cells;
+    int32_t mx = INT32_MIN;
+    for (uint32_t i = 0; i < cells; i++) if (field[i] > mx) mx = field[i];
+    int32_t sea = 0;                                   // the original's rule: negative = water
+    if (water_pct > 0) {
+        // the value below which water_pct % of the cells lie (a histogram over 4096 bins of the range)
+        int32_t mn = INT32_MAX;
+        for (uint32_t i = 0; i < cells; i++) if (field[i] < mn) mn = field[i];
+        const int64_t span = (int64_t)mx - mn + 1;
+        std::vector<uint32_t> hist(4096, 0);
+        for (uint32_t i = 0; i < cells; i++) hist[(size_t)(((int64_t)field[i] - mn) * 4096 / span)]++;
+        const uint64_t want = (uint64_t)cells * (uint32_t)(water_pct > 95 ? 95 : water_pct) / 100;
+        uint64_t acc = 0;
+        int b = 0;
+        while (b < 4095 && acc + hist[(size_t)b] <= want) acc += hist[(size_t)b++];
+        sea = (int32_t)(mn + span * b / 4096);
+    }
+    const int64_t range = (int64_t)mx - sea;
+    for (uint32_t i = 0; i < cells; i++) {
+        int64_t v = range > 0 ? ((int64_t)field[i] - sea) * 0xc4 / range : 0;
+        if (v < 0) v = 0;
+        if (v > 0xc4) v = 0xc4;
+        g_map_height[i] = (uint8_t)v;
+    }
+}
+
+void terrain_rivers_begin_world() {
+    for (uint32_t i = 0; i < g_world.cells; ++i) g_map_flags[i] = g_map_height[i] ? 5 : 0;
+    std::memset(g_map_type, 3, g_world.cells);
+}
+
+// terrain_trace_river without the two whole-map sweeps per river (a 4096 world has 16M cells): g_map_type stays
+// "3 = unvisited" between rivers, the visited cells are kept in a list, become water and are reset afterwards.
+// Cells the caller set to 0 in g_map_type beforehand (protected: spawn plateaus) are never entered.
+bool terrain_trace_river_world(uint32_t cell) {
+    if (g_map_type[cell] == 0) return false;
+    static std::vector<uint32_t> s_visited;
+    s_visited.clear();
+    uint8_t  cur_h = g_map_height[cell];
+    uint32_t cur   = cell;
+    for (;;) {
+        g_map_type[cur] = 0;
+        s_visited.push_back(cur);
+        const int x = world_cell_x(cur), y = world_cell_y(cur);
+        uint8_t best_h = 0xff;
+        uint32_t best = cur;
+        auto consider = [&](int nx, int ny) {
+            const uint32_t nb = world_cell(nx, ny);
+            if (g_map_type[nb] != 0 && g_map_height[nb] < best_h) { best_h = g_map_height[nb]; best = nb; }
+        };
+        consider(x, y - 1); consider(x + 1, y - 1); consider(x + 1, y); consider(x + 1, y + 1);
+        consider(x, y + 1); consider(x - 1, y + 1); consider(x - 1, y); consider(x - 1, y - 1);
+        if (best_h == 0xff) break;                       // dead end
+        if (g_map_flags[best] == 0) break;               // reached the sea
+        if (best_h > cur_h) g_map_height[best] = cur_h;
+        cur_h = g_map_height[best];
+        cur   = best;
+        if (cur_h == 0) break;
+    }
+    for (uint32_t c : s_visited) { g_map_flags[c] = 0; g_map_type[c] = 3; }
+    return true;
+}
+
+void terrain_rivers_end_world() { std::memset(g_map_type, 0xff, g_world.cells); }
 
 // terrain_sample_height_71e00(x, y): height at a world position, interpolated over the triangle of
 // the cell quad that contains the point. Quads alternate their diagonal with the parity of

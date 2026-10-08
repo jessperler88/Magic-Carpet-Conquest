@@ -689,7 +689,7 @@ int main(int argc, char **argv) {
         if (!replay_run_parse(&argc, argv, &replay, &err)) { mclog(MCLOG_ERROR, "mcport: %s", err.c_str()); return 1; }
     }
     if (!config_load(s_save_dir.c_str(), &argc, argv, &g_settings, &s_opts)) {
-        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--map 50..69] [--reseed] [--no-debug] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
+        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--size 256..4096] [--map 50..69] [--reseed] [--tiled | --generate] [--symmetry auto|none|point|mirror|rot4|dihedral] [--water %] [--rough %] [--continent %] [--springs N] [--wild %] [--lairs N] [--triggers N] [--portals N] [--no-debug] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
                            "[--replay-check N|state:FILE [--replay-ticks T]] "
                            "[--faithful] [--set section.key=value ...] [--config file]");
         return 1;

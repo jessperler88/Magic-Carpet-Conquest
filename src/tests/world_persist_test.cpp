@@ -12,7 +12,7 @@
 //  4. a 256-cell save loaded into the wide world goes back to 256 with the original's checksum;
 //  5. the sound cull: a source (128, 128) cells away is culled in the 1024 world (int64 squares; in the 256
 //     world that difference wraps), one 20 cells away is heard;
-//  6. a v3 movie of an rts run with ModeParams.world_size = 1024 (mode_level.cpp widens the template), with a
+//  6. a v3 movie of an rts run with ModeParams.world_size = 1024 (a generated world since session 2), with a
 //     wide teleport in the recording: gax has the WRLD block, max the wide map format, and the playback from a
 //     256-cell campaign level gives the recording's checksums every tick.
 #ifdef _MSC_VER
@@ -305,7 +305,7 @@ static void test_movie_v3() {
     g_cfg->paused = 0;
     CHECK(mode_start_run(g_game.c_str(), GAME_MODE_CONQUEST, mp));
     CHECK(sim_load_level(MODE_LEVEL_INDEX));
-    CHECK(g_world.size == 1024);                                    // mode_level.cpp widened the template
+    CHECK(g_world.size == 1024);                                    // a generated world (worldgen.h, session 2)
     void (*saved_input)() = g_hook_player_local_input;
     g_hook_player_local_input = script_input;
     g_script_tick = 1;
@@ -324,6 +324,7 @@ static void test_movie_v3() {
     CHECK(demo_recording() && demo_version() == 3);
     demo_close();
     g_hook_player_local_input = saved_input;
+    const size_t slots = (size_t)thing_pool_slots();               // a generated world: the extended pool (mode.h)
     mode_stop_run();
     std::printf("v3 recording of a 1024 rts run: wizard ends at %d,%d (cell %d,%d)\n", (int)wx_end, (int)wizard(0)->y,
                 (int)wx_end >> 8, (int)wizard(0)->y >> 8);
@@ -331,7 +332,7 @@ static void test_movie_v3() {
 
     const std::string gax = slurp(rec / "movie" / "gax00021.dat");
     const std::string max = slurp(rec / "movie" / "max00021.dat");
-    const size_t wrld = 16 + 1000 * sizeof(ThingHi) + sizeof(WorldHi);
+    const size_t wrld = 16 + slots * sizeof(ThingHi) + sizeof(WorldHi);
     CHECK(gax.size() > wrld && gax.compare(gax.size() - wrld, 4, "WRLD") == 0);
     CHECK(max.size() == 8 + 1024u * 1024u * 6 + 0x12c2 && max.compare(0, 4, "MCWM") == 0);
 

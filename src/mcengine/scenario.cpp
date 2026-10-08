@@ -7,6 +7,7 @@
 #include "mcfile.h"
 #include "level.h"
 #include "world.h"
+#include "worldgen.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -924,16 +925,31 @@ bool scenario_parse(const std::string &text, const std::string &name, Scenario *
                 const std::string k = lower(w[i]);
                 int x = 0;
                 if (k == "reseed") { p.flags |= MODE_PARAM_RESEED; continue; }
-                if (i + 1 >= w.size() || !parse_int(w[i + 1], &x) || x < 0) return err("rts seed S [bots B] [size N] [map M] [humans H] [reseed]");
+                if (k == "tiled") { p.flags |= MODE_PARAM_TILED; continue; }
+                if (k == "generate") { p.flags |= MODE_PARAM_GENERATE; continue; }
+                if (k == "symmetry" && i + 1 < w.size()) {
+                    const int s = worldgen_symmetry_parse(lower(w[++i]).c_str());
+                    if (s < 0) return err("rts symmetry auto|none|point|mirror|rot4|dihedral");
+                    p.world.symmetry = (uint8_t)s;
+                    continue;
+                }
+                if (i + 1 >= w.size() || !parse_int(w[i + 1], &x) || x < 0)
+                    return err("rts seed S [bots B] [size N] [map M] [humans H] [reseed] [tiled] [generate] [symmetry S] "
+                               "[water %] [rough %] [triggers N] [portals N]");
                 i++;
                 if (k == "seed") p.seed = (uint32_t)x;
                 else if (k == "bots") p.bots = (uint32_t)(x > 7 ? 7 : x);
                 else if (k == "size") p.world_size = (uint32_t)x;
                 else if (k == "map") p.map = (uint32_t)x;
                 else if (k == "humans") p.humans = (uint32_t)(x < 1 ? 1 : x > 8 ? 8 : x);
+                else if (k == "water") p.world.water = (uint8_t)(x > 90 ? 90 : x);
+                else if (k == "rough") p.world.roughness = (uint8_t)(x > 255 ? 255 : x);
+                else if (k == "triggers") p.world.features = (uint8_t)((p.world.features & 0xf0) | (x == 0 ? 15 : (x > 14 ? 14 : x)));
+                else if (k == "portals") p.world.features = (uint8_t)((p.world.features & 0x0f) | ((x == 0 ? 15 : (x > 14 ? 14 : x)) << 4));
                 else return err("unknown rts option " + w[i - 1]);
             }
-            if (p.world_size != 256) return err("rts size: only 256 until round 11");
+            if (p.world_size < 256 || p.world_size > 4096 || (p.world_size & (p.world_size - 1)))
+                return err("rts size: a power of two 256..4096");
             out->rts = true;
             out->rts_params = p;
             continue;
