@@ -31,6 +31,7 @@ level is won when you hold the required share of the world's mana.
 | Input | Action |
 |---|---|
 | **Tab** or **Enter** | Open / close the spell book (it also shows the map) |
+| **Mouse wheel** (map showing) | Zoom the map: in to 25 %, out to the whole world of a big Conquest world (the original scale is the most in the campaign) |
 | **Left click** a spell | Put it in your left hand |
 | **Right click** a spell | Put it in your right hand |
 | **1 … 0** over a spell | Assign it to quick-select key 1-10 |
