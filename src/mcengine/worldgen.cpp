@@ -552,7 +552,21 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     WorldLayout lay;
     lay.size = s.size;
     lay.symmetry = s.symmetry;
-    const GenMap &gen = level->gen;
+    // The terrain parameters are a fixed preset, not the template's: the multiplayer templates' class thresholds
+    // are tuned to their own hand-made maps (level 50 has them all 0 = every land cell steep and no rivers, others
+    // 7 = nearly all cliffs or 100 = none), so a generated world from them would depend on which template the seed
+    // picked. The template keeps its seed (textures / light RNG) and supplies the player blocks (spells, AI).
+    // Written back into level->gen, so the LevelData says what built the world.
+    GenMap &gen = level->gen;
+    gen.raise = 0;
+    gen.gnarl = 16;             // second noise amplitude (x roughness %); the campaign uses 0..59
+    gen.river = 20;             // per 256 x 256 cells; sources above height 40
+    gen.sourc = 40;
+    gen.snlin = 200;            // snow line (Hidden Worlds data set only): off
+    gen.snflt = 45;             // terrain_classify_flat: cross range below = flat land
+    gen.bhlin = 25;             // lowland / interior: 3x3 max below ...
+    gen.bhflt = 13;             // ... with a range up to this
+    gen.rkste = 12;             // cross range from this on = steep rock / cliff edge (a few % of the land)
     g_rng16 = (uint16_t)gen.seed;
     g_state->rng = (uint32_t)gen.seed;
     const uint32_t seed = mix(params.seed ^ 0x3017d00du);

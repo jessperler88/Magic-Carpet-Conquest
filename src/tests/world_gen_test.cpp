@@ -166,8 +166,15 @@ static void check_world(const ModeParams &mp, const char *png) {
     int plateau = -1;
     for (const WorldFeature &f : L.features) {
         if (f.kind != WFEAT_SPAWN) continue;
-        const int h = g_map_height[world_cell(f.x, f.y)];
+        // away from the centre: a computer wizard's start castle (castle_level > 0) stamps its footprint there
+        const int h = g_map_height[world_cell(f.x - 9, f.y - 9)];
         if (plateau < 0) plateau = h;
+        if (h != plateau || h < 0x28) {
+            std::printf("  seat %d at %d,%d: height %d (first seat %d), class %d; row:", f.grade, f.x, f.y, h, plateau,
+                        g_map_flags[world_cell(f.x, f.y)] & 7);
+            for (int d = -14; d <= 14; d += 2) std::printf(" %d", g_map_height[world_cell(f.x + d, f.y)]);
+            std::printf("\n");
+        }
         CHECK(h == plateau && h >= 0x28);
         CHECK((g_map_flags[world_cell(f.x, f.y)] & 7) != 0);
         if (f.grade < s.players) {
@@ -321,6 +328,13 @@ int main(int argc, char **argv) {
     fs::create_directories(g_out, ec);
 
     ModeParams mp;
+    if (const char *s = std::getenv("WG_SEED")) {       // look at one world: WG_SEED=n [WG_BOTS=b] [WG_SIZE=N]
+        mp.seed = (uint32_t)std::strtoul(s, nullptr, 0);
+        mp.bots = std::getenv("WG_BOTS") ? (uint32_t)std::atoi(std::getenv("WG_BOTS")) : 3;
+        mp.world_size = std::getenv("WG_SIZE") ? (uint32_t)std::atoi(std::getenv("WG_SIZE")) : 1024;
+        check_world(mp, "world_gen_seed.png");
+        return g_fail ? 1 : 0;
+    }
     mp.seed = 1; mp.world_size = 1024; mp.bots = 3; mp.humans = 1;
     check_world(mp, "world_gen_1024.png");
     mp.seed = 2; mp.world_size = 512; mp.bots = 1;
@@ -330,6 +344,28 @@ int main(int argc, char **argv) {
     mp = ModeParams{};
     mp.seed = 4; mp.world_size = 2048; mp.bots = 7; mp.humans = 1;
     check_world(mp, "world_gen_2048.png");
+    // every template the seed can pick builds a full world (round 11: template 50's class thresholds gave a world of
+    // steep rock with no features before the generator preset)
+    for (uint32_t seed : {453406441u, 22041985u, 145629623u, 171188u, 7u, 99u, 1234u, 31337u, 4242u, 900000u}) {
+        ModeParams q;
+        q.seed = seed; q.world_size = 1024; q.bots = 4; q.humans = 1;
+        CHECK(start(q));
+        const WorldLayout &L = worldgen_last_layout();
+        int count[16] = {}, steep = 0, water = 0;
+        for (const WorldFeature &f : L.features) count[f.kind & 15]++;
+        for (uint32_t c = 0; c < g_world.cells; c++) {
+            const int k = g_map_flags[c] & 7;
+            steep += k == 1 || k == 6;
+            water += k == 0;
+        }
+        std::printf("seed %u template %u: water %d %%, steep %d %%, springs %d lairs %d triggers %d portals %d groves %d, "
+                    "extra %d\n", seed, g_mode.template_level, (int)((int64_t)water * 100 / g_world.cells),
+                    (int)((int64_t)steep * 100 / g_world.cells), count[WFEAT_SPRING], count[WFEAT_LAIR],
+                    count[WFEAT_TRIGGER], count[WFEAT_PORTAL] / 2, count[WFEAT_TREES], L.extra_records);
+        CHECK(count[WFEAT_SPRING] >= 16 && count[WFEAT_LAIR] >= 16 && count[WFEAT_TREES] >= 100);
+        CHECK(steep * 100 / (int64_t)g_world.cells < 40);
+        mode_stop_run();
+    }
     check_triggers_and_portals();
     check_determinism();
     if (g_fail) { std::printf("world_gen_test: %d FAILED\n", g_fail); return 1; }
