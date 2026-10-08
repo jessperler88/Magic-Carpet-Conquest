@@ -4,6 +4,7 @@
 #include "world.h"
 #include "mc_globals.h"
 #include "mc_math.h"
+#include "thing.h"
 #include <algorithm>
 #include <cstring>
 
@@ -157,6 +158,13 @@ struct Placer {
         return true;
     }
     int free_records() const { return kRecords - nrec; }
+    std::vector<ThingInit> extra;       // records beyond the level file's (thing.h level_extra_records_set)
+    void add_extra(uint16_t cls, uint16_t model, int x, int y) {
+        ThingInit r{};
+        r.cls = cls; r.model = model;
+        r.x = (uint16_t)world_wrap_cell(x); r.y = (uint16_t)world_wrap_cell(y);
+        extra.push_back(r);
+    }
     void feature(uint8_t kind, uint8_t grade, int x, int y, uint16_t link = 0) {
         out.features.push_back(WorldFeature{kind, grade, (uint16_t)world_wrap_cell(x), (uint16_t)world_wrap_cell(y), link});
     }
@@ -463,27 +471,44 @@ void place_features(Placer &P, int players) {
         }
     }
 
-    // wild creatures (single wanderers, thinned near the seats) and groves share what is left of the records
-    const int wild_orbits = s.wild_pct > 0 ? std::min(30 * area * s.wild_pct / 100, P.free_records() / 3) / g : 0;
-    for (int k = 0; k < wild_orbits; k++) {
-        if (!P.pick_orbit(45, 200, 6, true, orb, &n, 16)) continue;
+    // Scenery and wild creatures go to the extra records (thing.h level_extra_records_set), not the level file's
+    // 1999: per 256 x 256 cells (the campaign's multiplayer maps have ~80 trees, ~40 stones, ~90 free creatures)
+    // 12 groves of 6-14 trees, 40 lone stones / dolmens / trees and 40 wild creatures (x wild %), all scaled down
+    // together to fit a third of the pool.
+    int groves = 12 * area, singles = 40 * area, wild = 40 * area * s.wild_pct / 100;
+    const int want = groves * 10 + singles + wild, cap = mode_generated_world_slots((uint32_t)g_world.size) / 3;
+    if (want > cap) {
+        groves = (int)((int64_t)groves * cap / want);
+        singles = (int)((int64_t)singles * cap / want);
+        wild = (int)((int64_t)wild * cap / want);
+    }
+    for (int k = 0; k < wild / g; k++) {
+        if (!P.pick_orbit(45, 200, 4, true, orb, &n, 16)) continue;
         const int grade = std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 45) * 4 / 120, 1, 4);
         const Pack &pk = kPacks[grade - 1][P.rng.below(3)];
-        for (int i = 0; i < n; i++) P.add(5, pk.model, orb[i].x, orb[i].y);
+        for (int i = 0; i < n; i++) P.add_extra(5, pk.model, orb[i].x, orb[i].y);
     }
-    const int grove_orbits = std::min(12 * area, P.free_records() / 12) / g;
-    for (int k = 0; k < grove_orbits; k++) {
+    for (int k = 0; k < groves / g; k++) {
         if (!P.pick_orbit(25, 200, 8, true, orb, &n, 16)) continue;
-        const int trees = P.rng.range(5, 12);
+        const int trees = P.rng.range(6, 14), r = trees > 10 ? 4 : 3;
         const Rng saved = P.rng;
         for (int i = 0; i < n; i++) {
             P.rng = saved;
             P.feature(WFEAT_TREES, 0, orb[i].x, orb[i].y);
             for (int t = 0; t < trees; t++) {
-                const Cell c = P.scatter(orb[i].x, orb[i].y, 3);
-                P.add(2, P.rng.below(10) == 0 ? 1 : 0, c.x, c.y);       // trees, now and then a standing stone
+                const Cell c = P.scatter(orb[i].x, orb[i].y, r);
+                P.add_extra(2, P.rng.below(12) == 0 ? 1 : 0, c.x, c.y);   // trees, now and then a standing stone
             }
         }
+    }
+    for (int k = 0; k < singles / g; k++) {
+        // lone scenery: no spacing to other features (the feature list would grow by thousands), land only
+        const int x = P.rng.below(g_world.size), y = P.rng.below(g_world.size);
+        const int roll = P.rng.below(10);
+        const uint16_t model = roll < 5 ? 0 : (roll < 9 ? 1 : 2);        // tree, standing stone, dolmen
+        n = orbit(P.out.symmetry, x, y, orb);
+        if (P.band_pct(x, y) < 20) continue;
+        for (int i = 0; i < n; i++) if (P.land(orb[i].x, orb[i].y)) P.add_extra(2, model, orb[i].x, orb[i].y);
     }
 }
 
@@ -556,7 +581,9 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     place_rivers(P, gen);
     terrain_build_passes(gen);
     place_features(P, s.players);
+    level_extra_records_set(P.extra.data(), P.extra.size());
     lay.records = P.nrec;
+    lay.extra_records = (int)P.extra.size();
     s_last = lay;
     if (out) *out = lay;
     return true;

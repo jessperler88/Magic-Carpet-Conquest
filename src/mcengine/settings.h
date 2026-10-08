@@ -13,7 +13,7 @@
 struct PortSettings {
     // ---- task A: extended renderer (render_landscape.cpp, render_things.cpp, sprite_cache.cpp) ----
     bool render_extended = false;   // false = render_landscape_29050 exactly (40x21 grid, 20-cell cull)
-    int  draw_distance   = 20;      // extended: cull radius in cells (original 20; max 127, the map wraps at 256)
+    int  draw_distance   = 20;      // extended: cull radius in cells (original 20; 8..255, render_ext uses at most 127 in a 256-cell world)
     int  fog_start_pct   = 75;      // extended: full light below this % of draw_distance (original 15/20 = 75)
     int  lod             = 1;       // extended: 0 = every cell a full-texture quad; 1 = quality: texture mip levels
                                     //   once a texel is smaller than a pixel, 2x2 / 4x4 / 8x8 cell quads below

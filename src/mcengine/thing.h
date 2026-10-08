@@ -183,6 +183,12 @@ void level_spawn_thing_record(const ThingInit *rec);
 // switch_activate_356e0(dis_id, clear): spawn every level record whose DisId matches; dis_id 0 is
 // the level start (also counts creatures / spells and reloads the sprite groups).
 void switch_activate(unsigned dis_id, bool clear_records);
+// Port (Phase 4 round 11): level records beyond the level file's 1999 - a generated world's scenery and wild
+// creatures (worldgen.cpp). switch_activate(0) counts and spawns them after LevelData.things, exactly as records
+// with DisId 0, and then empties the list (the level reset empties it too). Nothing else reads them.
+void level_extra_records_set(const ThingInit *recs, size_t count);
+void level_extra_records_clear();
+size_t level_extra_records_count();
 extern void (*g_hook_effect_wizard_init)(Thing *t, int arg);      // effect_wizard_init_35090
 extern void (*g_hook_sprite_group_priorities_clear)();            // sprite_group_priorities_clear_4bec0
 extern void (*g_hook_sprite_mark_needed_for_model)(const ThingInit *rec);   // sprite_mark_needed_for_model_4bee0

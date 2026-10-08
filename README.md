@@ -155,7 +155,9 @@ Visual Studio 18 Build Tools, CMake 4.3.
   distance, wild creatures, groves, linked **teleport portal pairs** and hidden **trigger areas** (mana, ambush,
   earthquake, volcano, storm, craters, an elite, a spell) that fire for any wizard, computer wizards included.
   Controls: `--rough % --continent % --springs N --wild % --lairs N --triggers N --portals N` (`none` for the counts).
-  1024 builds in ~0.15 s, 2048 in ~1 s. 66 ctest tests, every reference set still identical.
+  1024 builds in ~0.15 s, 2048 in ~1 s. Generated worlds run with a 16384-Thing pool (32768 from 2048 cells) and
+  campaign-like scenery density; draw distance goes to 255 there (127 stays the cap for the campaign and Hidden
+  Worlds). 66 ctest tests, every reference set still identical.
 - Positions are 32-bit and the world size is a run-time parameter (256 .. 4096 cells, `src/mcengine/world.h`); the
   original game runs through the same code and stays byte-identical to the original (all reference sets).
   Plan: `docs/ROADMAP_PHASE4.md` round 11 (session 3: wake-near-any-wizard, world tests, two-instance sync).

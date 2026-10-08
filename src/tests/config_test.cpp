@@ -165,7 +165,7 @@ static void test_file() {
     PlatformOptions p4;
     warn.clear();
     CHECK(config_read_file(f3.string().c_str(), &s4, &p4, &warn, &missing));
-    CHECK_EQ(s4.draw_distance, 127);
+    CHECK_EQ(s4.draw_distance, 255);       // 8..255 (render_ext uses at most 127 in a 256-cell world)
     CHECK_EQ(s4.thing_slots, 1000);
     CHECK_EQ(s4.lod, 0);
     CHECK_EQ(s4.render_extended, false);                       // malformed: unchanged

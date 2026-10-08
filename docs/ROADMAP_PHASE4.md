@@ -222,7 +222,7 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
       (auto: 1 none, 2 point, 3-4 rot4, 5-8 dihedral; `--symmetry`), plateaus, springs in bands, towns, graded lairs,
       wild creatures, groves, trigger areas (8 payload types, all fire for bots - switches now fire for computer
       wizards in a mode run) and linked portal pairs, as THING_INIT records (budget 1999); `WorldParams` (8 bytes in
-      `ModeParams`, 0 = default) carried by movies / save states / the mode checksum; extended pool (>= 8192) for
+      `ModeParams`, 0 = default) carried by movies / save states / the mode checksum; extended pool (>= 16384, 32768 from 2048; scenery in extra records beyond the 1999; dd 255 in wide worlds) for
       generated worlds. **Not done** (listed in the report): lava thresholds, flood-fill connectivity (a carpet flies;
       walkers' reachability only matters once units have orders - round 15), day length / blight (rounds 13 / 21),
       lobby exchange (round 12), re-arming / visible triggers and payload weights as parameters. Original text:
@@ -580,7 +580,7 @@ commit). Read `docs/port/BRIEFING_round11.md` (session 2 section), `docs/analysi
 - Two-process lockstep (`net_test` parts 2-3 pattern) on `rts --size 1024 --bots 3` for 2000 ticks; the ModeParams
   (with `WorldParams`) must travel with the network rules until round 12's lobby does it.
 - The scaling decisions listed under session 3 above (sound cull, tether, spiral rings, skeleton targets, castle-site
-  quadrants, rivers / tries - done for the generator) and `draw_distance` up to 255 in config / pause menu.
+  quadrants, rivers / tries - done for the generator). (`draw_distance` up to 255 in wide worlds: done in session 2.)
 - Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` plays, two instances stay in sync, the free camera flies the
   whole world.
 - Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2`.

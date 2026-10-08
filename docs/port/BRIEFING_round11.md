@@ -202,7 +202,9 @@ the class passes), so no agent split. Result and design: `docs/analysis/port_wor
 - **WorldParams** (mode.h, 8 bytes in ModeParams where round 10 had reserved zeros; 0 = default): symmetry, roughness,
   water, continent, springs, wild, lairs, features (triggers | portals nibbles). Full - grow it with a ModeState v2.
 - **Mode-run rule changes**: switches fire for computer wizards (`scenery.cpp`); a generated world's pool is at least
-  `kGeneratedWorldSlots` = 8192 (`thing.cpp thing_pool_wanted_slots`).
+  `mode_generated_world_slots(N)` = 16384 (32768 from 2048 cells; `thing.cpp thing_pool_wanted_slots`). Scenery and
+  wild creatures go into `level_extra_records_set` (thing.h), not the level file's 1999 records. Draw distance up to
+  255 in a wide world (ini 8..255, pause menu, render_ext caps 127 at 256 cells).
 - `worldgen_last_layout()` = what was placed where (seats, springs, lairs, triggers + DisIds, portal pairs, towns,
   groves); not saved. Tests: `world_gen_test` (PNG maps in `MC_WORLD_GEN_OUT`).
 - Options: `rts --size N --symmetry S --water % --rough % --continent % --springs N --wild % --lairs N --triggers N

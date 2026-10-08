@@ -64,8 +64,9 @@ enum : uint32_t {
                                         // session 1 test bed) instead of a generated world
     MODE_PARAM_GENERATE = 1u << 3,      // world_size 256: a generated world instead of the template level
 };
-// The Thing pool of a generated world is at least this big (thing.cpp thing_pool_wanted_slots).
-constexpr int kGeneratedWorldSlots = 8192;
+// The Thing pool of a generated world is at least this big (thing.cpp thing_pool_wanted_slots): 16384 up to 1024
+// cells (user, 2026-10-08), the pool's ceiling 32768 (i16 Thing indices) from 2048 on.
+inline int mode_generated_world_slots(uint32_t world_size) { return world_size > 1024 ? 32768 : 16384; }
 // A generated world (worldgen.h) instead of the template level.
 inline bool mode_params_generated(const ModeParams &p) {
     if (p.world_size > 256) return !(p.flags & MODE_PARAM_TILED);

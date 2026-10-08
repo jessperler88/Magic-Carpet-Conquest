@@ -70,7 +70,7 @@ Counts at the defaults (3 springs, 3 lairs, 3 triggers, 1 portal pair per seat):
   whose type != 0, so only human flyers (local or remote) fire switches - AI wizards never. In a mode run type 1 fires
   them too. Deterministic either way (no local-player test). The re-arm test (`switch_test_any_player`) already
   looks at every player record.
-- **Extended pool**: a generated world always runs with at least `kGeneratedWorldSlots` = 8192 slots
+- **Extended pool**: a generated world always runs with at least 8192 slots (16384 / 32768 since 3b below)
   (`thing_pool_wanted_slots`; from the mode params, so every peer and replay agrees; movies record the size anyway).
   1652 records spawned into the faithful 1000 slots left no slot for the wizards.
 - Teleport gates need no change: `effect_teleport_update` moves every player Thing (human or AI) that touches the gate
@@ -94,10 +94,28 @@ Counts at the defaults (3 springs, 3 lairs, 3 triggers, 1 portal pair per seat):
    brown towns, green groves. Looked at; in-game screenshots (`rts --size 1024` scenario with `shot`) show the
    plateau, rivers and lakes, a lair pack, a grove, a portal gate.
 
+## 3b. Follow-up after the user's first play (same day)
+
+User: "on that map size we need at least 16k things cap as its fairly sparse when it comes to features like trees etc.
+also 255 view distance needs to be available in the options when on conquest mode big genned maps, 127 max obviously
+stays the cap for base game and hidden worlds."
+
+- **Pool**: `mode_generated_world_slots(N)` = 16384 up to 1024 cells, 32768 (the i16 ceiling) above.
+- **Extra records** (`thing.h level_extra_records_set`): scenery and wild creatures no longer squeeze into the level
+  file's 1999 records; `switch_activate(0)` counts (creature_count, sprite marks) and spawns them after
+  `LevelData.things`, then empties the list (the level reset too). Per 256^2 cells: 12 groves of 6-14 trees, 40 lone
+  trees / standing stones / dolmens, 40 wild creatures (x wild %), scaled together to a third of the pool. The level
+  file keeps the seats, portals, towns, springs, lairs and trigger areas + payloads (360 records at 1024 / 4 seats).
+  Start of a 1024 world: ~1960 trees, 325 stones, 4999 live Things in 16384 slots; 2048 / 8 seats: 6712 trees,
+  16761 live in 32768.
+- **Draw distance**: ini range 8..255; the pause menu's maximum is 255 in a wide world (`world_wide()`), 127 otherwise;
+  `render_ext` already clamps to `kWin - 1` (127 at 256 cells), so the campaign and Hidden Worlds stay at 127 whatever
+  the ini says (the menu then shows "(127 in this world)").
+
 ## 4. Open points / for session 3 and later
 
-- The 1999-record budget: 2048+ worlds with 8 seats run out of groves first; 4096 needs a mode-side record table
-  (switch payloads too) - round 14's buildings will need it anyway.
+- The level file's 1999 records now only hold the gameplay features; 4096 worlds with many trigger payloads could
+  still need payloads in a mode-side table (round 14's buildings will need one anyway).
 - Springs are mana-ball blobs for now; round 14 makes them claimable territory (the layout keeps them as features:
   `worldgen_last_layout()`, not saved - regenerate from the params, or add a MODE-chunk copy when a later round reads it
   after a load).

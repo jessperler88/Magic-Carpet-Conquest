@@ -62,6 +62,7 @@ struct WorldLayout {
     std::vector<WorldFeature> features;
     int records = 0;                 // THING_INIT records written
     int records_dropped = 0;         // features that did not fit the 1999 records
+    int extra_records = 0;           // scenery / wild creatures beyond them (thing.h level_extra_records_set)
 };
 
 // The resolved generator controls (defaults filled in, clamped).

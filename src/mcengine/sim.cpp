@@ -86,6 +86,7 @@ void level_reset_state() {
     std::memset(g_state->start_pos, 0, sizeof g_state->start_pos);
     std::memset(&g_world_hi, 0, sizeof g_world_hi);
     world_set_size(256);                         // round 11: every level starts as the original's world (world.h)
+    level_extra_records_clear();                 // round 11: a generated world's records beyond the level file's
     std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
     std::memset(g_map_type, 0, g_world.cells);
     std::memset(g_map_height, 0, g_world.cells);

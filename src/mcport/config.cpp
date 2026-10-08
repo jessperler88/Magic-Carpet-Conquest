@@ -174,8 +174,9 @@ const Desc k_desc[] = {
     // ---- PortSettings (settings.h) ----
     {"render", "extended", K_BOOL, PS(render_extended), 0, 1, nullptr,
      "1 = the extended renderer (far view, LOD, any resolution); 0 = the original's 40x21-cell landscape"},
-    {"render", "draw_distance", K_INT, PS(draw_distance), 8, 127, nullptr,
-     "extended: view radius in cells (original 20; 127 = half the 256-cell wrapping map)"},
+    {"render", "draw_distance", K_INT, PS(draw_distance), 8, 255, nullptr,
+     "extended: view radius in cells (original 20; at most 127 = half the 256-cell map in the campaign, 255 in a "
+     "generated Conquest world)"},
     {"render", "fog_start_pct", K_INT, PS(fog_start_pct), 0, 100, nullptr,
      "extended: full light below this % of the draw distance (original 75)"},
     {"render", "lod", K_INT, PS(lod), 0, 2, nullptr,

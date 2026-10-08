@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "ui_draw.h"
 #include "world_set.h"
+#include "world.h"
 #include <SDL_scancode.h>
 #include <algorithm>
 #include <cstdio>
@@ -26,7 +27,7 @@ struct Opt {
 
 const Opt k_opts[] = {
     {"Renderer", "render.extended", "0:Original|1:Extended", 0, 0, 0, nullptr, nullptr},
-    {"Draw distance", "render.draw_distance", nullptr, 8, 127, 8, " cells", nullptr},
+    {"Draw distance", "render.draw_distance", nullptr, 8, 255, 8, " cells", nullptr},   // option_hi: 127 at 256 cells
     {"Fog starts at", "render.fog_start_pct", nullptr, 0, 100, 5, " %", nullptr},
     {"Far detail", "render.lod", "0:Full|1:Quality|2:Fast", 0, 0, 0, nullptr, nullptr},
     {"Fog", "render.fog_mode", "0:Auto|1:Darken|2:Haze", 0, 0, 0, nullptr, nullptr},
@@ -54,6 +55,13 @@ std::vector<Choice> parse_choices(const char *c) {
         c = bar ? bar + 1 : nullptr;
     }
     return out;
+}
+
+// The upper end of a number option. Draw distance: 127 in a 256-cell world (the campaign, Hidden Worlds - the map
+// wraps at 128 cells each way), 255 in a wider one (a generated Conquest world; render_ext clamps the same way).
+int option_hi(const Opt &o) {
+    if (std::strcmp(o.key, "render.draw_distance") == 0) return world_wide() ? 255 : 127;
+    return o.hi;
 }
 
 enum Action { A_NONE, A_RESUME, A_SAVE_PAGE, A_LOAD_PAGE, A_OPTIONS_PAGE, A_LEAVE, A_QUIT, A_BACK, A_SLOT, A_OPTION };
@@ -123,6 +131,11 @@ std::string GameMenu::option_value(int opt) const {
         std::snprintf(b, sizeof b, " (this level %d %%)", gameplay_rules().possession_range_pct);
         text += b;
     }
+    if (std::strcmp(o.key, "render.draw_distance") == 0 && std::atoi(v.c_str()) > option_hi(o)) {
+        char b[48];
+        std::snprintf(b, sizeof b, " (%d in this world)", option_hi(o));
+        text += b;
+    }
     if (o.note) text += std::string(" (") + o.note + ")";
     return text;
 }
@@ -149,9 +162,10 @@ void GameMenu::step_option(int opt, int dir) {
         }
         next = cs[idx].value;
     } else {
+        const int hi = option_hi(o);
         next = cur + (dir == 0 ? 1 : dir) * o.step;
-        if (dir == 0 && cur >= o.hi) next = o.lo;                                     // Enter wraps
-        next = std::max(o.lo, std::min(o.hi, next));
+        if (dir == 0 && cur >= hi) next = o.lo;                                       // Enter wraps
+        next = std::max(o.lo, std::min(hi, next));
     }
     if (next == cur) return;
     const std::string v = std::to_string(next);

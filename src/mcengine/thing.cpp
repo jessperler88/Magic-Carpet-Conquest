@@ -132,9 +132,10 @@ static inline int32_t &active_entry(int p) {
 int thing_pool_wanted_slots() {
     int n = s_forced_slots ? s_forced_slots : g_settings.thing_slots;
     if (n < MC_THING_SLOTS) n = MC_THING_SLOTS;
-    // Phase 4 round 11: a generated world (worldgen.h) places up to 1999 records - it always runs with the
-    // extended pool (from the mode parameters every peer and replay shares, so still deterministic)
-    if (mode_active() && mode_params_generated(g_mode.params) && n < kGeneratedWorldSlots) n = kGeneratedWorldSlots;
+    // Phase 4 round 11: a generated world (worldgen.h) places thousands of Things - it always runs with a big pool
+    // (from the mode parameters every peer and replay shares, so still deterministic)
+    if (mode_active() && mode_params_generated(g_mode.params) && n < mode_generated_world_slots(g_mode.params.world_size))
+        n = mode_generated_world_slots(g_mode.params.world_size);
     if (n > MC_THING_SLOTS_MAX) n = MC_THING_SLOTS_MAX;
     return n;
 }
@@ -580,9 +581,24 @@ void level_spawn_thing_record(const ThingInit *rec) {
     }
 }
 
+static std::vector<ThingInit> s_extra_records;     // level_extra_records_set (thing.h)
+void level_extra_records_set(const ThingInit *recs, size_t count) { s_extra_records.assign(recs, recs + count); }
+void level_extra_records_clear() { s_extra_records.clear(); }
+size_t level_extra_records_count() { return s_extra_records.size(); }
+
 // switch_activate_356e0
 void switch_activate(unsigned dis_id, bool clear_records) {
     LevelData &lv = g_state->level;
+    // port: a generated world's records beyond the level file's (DisId 0: spawned with the level start)
+    auto count_record = [](ThingInit &r) {
+        if (g_hook_sprite_mark_needed_for_model) g_hook_sprite_mark_needed_for_model(&r);
+        if (r.cls == 5) {
+            if (r.model != 0xc && r.model != 0xd && r.model != 0xe && r.model != 0xf && r.model != 9)
+                g_state->creature_count++;
+        } else if (r.cls == 0xc) {
+            if (r.model < 24) g_state->spells_present[r.model]++;   // unchecked in the original
+        }
+    };
     if (dis_id == 0 && s_extend_at_start) {
         // port: the level is generated - from here on the pool has the wanted size (an empty extension
         // below the GameState part: nothing the original's pool holds changes)
@@ -593,15 +609,8 @@ void switch_activate(unsigned dis_id, bool clear_records) {
         g_state->creature_count = 0;
         std::memset(g_state->spells_present, 0, sizeof g_state->spells_present);
         if (g_hook_sprite_group_priorities_clear) g_hook_sprite_group_priorities_clear();
-        for (ThingInit &r : lv.things) {
-            if (g_hook_sprite_mark_needed_for_model) g_hook_sprite_mark_needed_for_model(&r);
-            if (r.cls == 5) {
-                if (r.model != 0xc && r.model != 0xd && r.model != 0xe && r.model != 0xf && r.model != 9)
-                    g_state->creature_count++;
-            } else if (r.cls == 0xc) {
-                if (r.model < 24) g_state->spells_present[r.model]++;   // unchecked in the original
-            }
-        }
+        for (ThingInit &r : lv.things) count_record(r);
+        for (ThingInit &r : s_extra_records) count_record(r);
         if (g_hook_sprite_groups_reload_by_priority) g_hook_sprite_groups_reload_by_priority();
     }
     models_initialise();
@@ -610,6 +619,11 @@ void switch_activate(unsigned dis_id, bool clear_records) {
             level_spawn_thing_record(&r);
             if (clear_records) r.cls = 0;
         }
+    }
+    if (dis_id == 0 && !s_extra_records.empty()) {
+        for (ThingInit &r : s_extra_records)
+            if (r.cls != 0) level_spawn_thing_record(&r);
+        s_extra_records.clear();
     }
     g_state->active_top = -1;
 }

@@ -145,11 +145,22 @@ static void check_world(const ModeParams &mp, const char *png) {
     CHECK(L.records > 0 && L.records <= 1999);
     int count[16] = {};
     for (const WorldFeature &f : L.features) count[f.kind & 15]++;
-    std::printf("size %d players %d sym %s: %.0f ms, %d seats, %d records (%d dropped); springs %d lairs %d triggers %d "
-                "portal ends %d towns %d groves %d; symmetric heights %d %%\n",
+    int trees = 0, stones = 0, wild = 0;
+    for (int k = 1; k < thing_pool_slots(); k++) {
+        const Thing *t = thing_at((unsigned)k);
+        if (t->cls == 2) (t->type == 0 ? trees : stones)++;
+        if (t->cls == 5) wild++;
+    }
+    std::printf("size %d players %d sym %s: %.0f ms, %d seats, %d records (%d dropped) + %d extra; springs %d lairs %d "
+                "triggers %d portal ends %d towns %d groves %d; pool %d, live %d (trees %d, stones %d, creatures %d); "
+                "symmetric heights %d %%\n",
                 g_world.size, s.players, worldgen_symmetry_name(L.symmetry), ms, L.seats, L.records, L.records_dropped,
-                count[WFEAT_SPRING], count[WFEAT_LAIR], count[WFEAT_TRIGGER], count[WFEAT_PORTAL], count[WFEAT_TOWN],
-                count[WFEAT_TREES], symmetry_pct(L.symmetry));
+                L.extra_records, count[WFEAT_SPRING], count[WFEAT_LAIR], count[WFEAT_TRIGGER], count[WFEAT_PORTAL],
+                count[WFEAT_TOWN], count[WFEAT_TREES], thing_pool_slots(), thing_pool_live_count(), trees, stones, wild,
+                symmetry_pct(L.symmetry));
+    CHECK(thing_pool_slots() >= mode_generated_world_slots(mp.world_size));
+    CHECK(level_extra_records_count() == 0);                    // spawned at the level start
+    CHECK(trees >= L.extra_records / 3);
     if (s.symmetry != WORLD_SYM_NONE) CHECK(symmetry_pct(L.symmetry) > 50);
     // seats: one plateau height, every player on its seat
     int plateau = -1;
