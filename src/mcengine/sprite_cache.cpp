@@ -19,16 +19,16 @@
 #include <cstdlib>
 #include <cstring>
 
-uint8_t *g_sprite_ptr[MC_SPRITE_COUNT];
-uint32_t g_sprite_group_stamp[MC_SPRITE_COUNT];
-uint8_t  g_sprite_locked[MC_SPRITE_COUNT];
-uint8_t  g_sprite_group_priority[MC_SPRITE_COUNT];
+uint8_t *g_sprite_ptr[MC_SPRITE_SLOTS];
+uint32_t g_sprite_group_stamp[MC_SPRITE_SLOTS];
+uint8_t  g_sprite_locked[MC_SPRITE_SLOTS];
+uint8_t  g_sprite_group_priority[MC_SPRITE_SLOTS];
 uint8_t  g_sprite_resident_enabled = 1;                 // DAT_000987e8
 
 static mc_tmap_set s_tmaps;                             // DAT_000987e4 (file handle) + DAT_000b84f4 (directory)
 static bool        s_tmaps_open = false;
 static bool        s_cache_ready = false;               // DAT_000adf58 != 0
-static size_t      s_sprite_bytes[MC_SPRITE_COUNT];     // size of the loaded chunk
+static size_t      s_sprite_bytes[MC_SPRITE_SLOTS];     // size of the loaded chunk
 
 // Animation record of an animated sprite (0x1c bytes in the exe, filled by sprite_cache_register_4c880).
 struct SpriteAnim {
@@ -49,13 +49,27 @@ static uint8_t s_flic_transparent = 0;
 // ---- directory ------------------------------------------------------------------------------------
 
 uint16_t sprite_group_of(unsigned sprite) {
+    if (sprite >= MC_SPRITE_COUNT && sprite < MC_SPRITE_SLOTS) return (uint16_t)sprite;   // port sprite: its own group
     return s_tmaps_open && sprite < s_tmaps.count ? s_tmaps.entries[sprite].group : 0;
+}
+
+bool sprite_port_set(unsigned sprite, const uint8_t *chunk, size_t len) {
+    if (sprite < MC_SPRITE_COUNT || sprite >= MC_SPRITE_SLOTS) return false;
+    std::free(g_sprite_ptr[sprite]);
+    g_sprite_ptr[sprite] = nullptr;
+    s_sprite_bytes[sprite] = 0;
+    if (!chunk || len < 6) return true;
+    g_sprite_ptr[sprite] = static_cast<uint8_t *>(std::malloc(len));
+    if (!g_sprite_ptr[sprite]) return false;
+    std::memcpy(g_sprite_ptr[sprite], chunk, len);
+    s_sprite_bytes[sprite] = len;
+    return true;
 }
 uint32_t sprite_chunk_size(unsigned sprite) {
     return s_tmaps_open && sprite < s_tmaps.count ? s_tmaps.entries[sprite].unpacked_size : 0;
 }
 size_t sprite_loaded_bytes(unsigned sprite) {
-    return sprite < MC_SPRITE_COUNT && g_sprite_ptr[sprite] ? s_sprite_bytes[sprite] : 0;
+    return sprite < MC_SPRITE_SLOTS && g_sprite_ptr[sprite] ? s_sprite_bytes[sprite] : 0;
 }
 
 // tmap_free_space_4c550: free bytes of the pool. The port allocates from the heap.
@@ -322,7 +336,8 @@ uint32_t sprite_cache_evict_lru(uint32_t bytes_needed) {
 // sprite_ensure_loaded_4bdd0
 int sprite_ensure_loaded(unsigned sprite) {
     sprite &= 0xffff;
-    if (sprite >= MC_SPRITE_COUNT) return 0;             // the exe has no range check
+    if (sprite >= MC_SPRITE_COUNT)                       // the exe has no range check; port sprites are set or not
+        return sprite < MC_SPRITE_SLOTS && g_sprite_ptr[sprite] != nullptr;
     int32_t need = (int32_t)(sprite_group_size(sprite) - tmap_free_space() + 0x14);
     for (unsigned tries = 0; need > 0 && tries < 4; tries++)
         need -= (int32_t)sprite_cache_evict_lru((uint32_t)need);
@@ -430,8 +445,8 @@ void texture_load_needed() {
 void sprite_cache_init() {
     if (s_cache_ready) return;                           // the exe only calls it while DAT_000adf58 == 0
     s_cache_ready = true;
-    std::memset(g_sprite_ptr, 0, sizeof g_sprite_ptr);
-    std::memset(s_sprite_bytes, 0, sizeof s_sprite_bytes);
+    std::memset(g_sprite_ptr, 0, MC_SPRITE_COUNT * sizeof g_sprite_ptr[0]);       // port sprites stay
+    std::memset(s_sprite_bytes, 0, MC_SPRITE_COUNT * sizeof s_sprite_bytes[0]);
     std::memset(g_sprite_group_stamp, 0, sizeof g_sprite_group_stamp);
     for (SpriteAnim &a : s_anim) a = SpriteAnim{};
     texture_mark_resident();
@@ -443,7 +458,7 @@ void sprite_cache_shutdown() {
     for (unsigned i = 0; i < MC_SPRITE_COUNT; i++)
         if (g_sprite_ptr[i]) sprite_free_chunk(i);       // tmap_cache_destroy_4c790 / texture_anim_table_destroy_4cb50
     sprite_group_priorities_clear();
-    std::memset(g_sprite_ptr, 0, sizeof g_sprite_ptr);
+    std::memset(g_sprite_ptr, 0, MC_SPRITE_COUNT * sizeof g_sprite_ptr[0]);       // port sprites stay (sprite_port_set)
     std::memset(g_sprite_group_stamp, 0, sizeof g_sprite_group_stamp);
     s_cache_ready = false;
 }

@@ -72,3 +72,38 @@ Free camera: Ctrl x4 on top of Shift (~120 cells/s at 165 fps): a 1024 world in 
 - `mode_start_net_run` is the call the lobby makes after its setup exchange; `rts --net` can go then.
 - A human that leaves a network mode run: untested (net_test part 3 covers the original's rule).
 - Bot behaviour at scale (hunt radius, defending the castle, using portals) = round 17; respawn = round 13.
+
+## 6. Follow-up after the user's play of seed 49 / 512 (same day): scenery and terrain art
+
+User: "monsters worked well, wizard bots seemed a little passive", then asked for spell urns in the placer, standing
+stones only in circles (60 % holding a trigger) and alone very rarely, Hidden Worlds' tree in woodland clusters of
+each type (future lumber), higher peaks, and Hidden Worlds' snow capping them. All generated-world only.
+
+- **Spell urns** (`worldgen.cpp`): class-12 level pickups per seat - 2 near (Heal, Shield, Beyond Sight, Steal Mana,
+  Rebound, Lightning, Mana Magnet), 1 contested (Earthquake, Crater, Teleport, Rubber Band, Invisible, Skeleton,
+  Fire Wall), 1 far (Meteor, Volcano, Thunderbolt); one spell per orbit (fair). Not Smart Bomb (its phase-2 pickup
+  is unbound in the 1996 engine). `WFEAT_URN` (grade = tier, link = spell). Bots do not seek urns yet (round 17).
+- **Stone circles**: the trigger areas now sit in rings of 7-11 standing stones (a dolmen in the centre of every
+  third); circles = triggers x 5/3 per seat, exactly 60 % of the orbits hold a trigger. Lone stones / dolmens 1 in 40
+  of the lone scenery; groves no longer mix in stones. `WFEAT_CIRCLE`.
+- **Woods**: one type each, palms below the land's median height, oaks above, alternating so both appear; 2/3 as
+  many woods as session 2's groves with 10-22 trees (same tree count). Oaks: the trees spawn as the original's
+  tree, then `worldgen_apply_woods` (mode_level's level start) sets SpriteDesc 285 (`MC_SPRITE_DESC_OAK`, a copy of
+  the palm's 0x53 with the palm's extents - collisions never depend on the data installed). `WFEAT_TREES` grade =
+  `WOOD_PALM` / `WOOD_OAK`.
+- **Peaks**: `terrain_normalise_world` lifts heights above 0x60 quadratically (+40 at the top: 0xc4 -> 0xec).
+- **Snow**: `terrain_build_passes(gen, true)` for a generated world = Hidden Worlds' classification (steep rock class
+  1, `terrain_mark_snow`); the snow line is the height above which the top 6 % of the land lies (>= 0x90). Seed 49 /
+  512: peak 233, snow line 199, 10939 snow cells.
+- **Art** (`engine.h world_art_apply`, render-only, through `g_hook_level_art` from sim.cpp's level start): with the
+  base set active and Hidden Worlds installed, the 54 texture tiles whose corner tuple contains class 6 come from
+  `blk1-*` (a patched copy of the atlas; the renderers rebuild from the new pointer; average colours recomputed),
+  and tmaps1-0 chunk 140 (the broadleaf tree) becomes port sprite `MC_SPRITE_OAK` (sprites.h: 8 port slots after the
+  529 tmaps sprites, own groups, never evicted) - both remapped to the base palette (weighted nearest colour;
+  tiles compared side by side, the remap is near-lossless). Without Hidden Worlds: class-6 cells show the base
+  set's class-6 tiles (rock) and the oaks are palms; the simulation is identical either way.
+- **Two more checksum exclusions** found by `world_net_test` on the new world (a fire near a human):
+  `PlayerBlock.fire_dist` / `ridge_dist`, the local player's sound proximities (measured for the local player only).
+- `world_gen_test` part 7 (`check_scenery`, seed 49 / 512): 40 circles / 24 with a trigger, 329 stones in circles /
+  13 alone, urns 16 / 8 / 8, woods 16 palm / 16 oak (368 / 336 trees), peak 233, snow only above the line (bar the
+  spike smoothing's few), rock class 1 present, oak extents = palm's. 69/69 ctest.

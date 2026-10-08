@@ -12,12 +12,20 @@
 #include "render.h"
 
 constexpr int MC_SPRITE_COUNT = 0x211;                 // tmaps.dat chunks
+// Port-only sprites after the tmaps chunks (world_art.h: art imported from another data set, palette-remapped).
+// Each is its own group, set with sprite_port_set, never evicted; not loaded = not drawn.
+constexpr int MC_SPRITE_PORT_SLOTS = 8;
+constexpr int MC_SPRITE_SLOTS = MC_SPRITE_COUNT + MC_SPRITE_PORT_SLOTS;
+constexpr int MC_SPRITE_OAK = MC_SPRITE_COUNT;          // Hidden Worlds' broadleaf tree (its tmaps1-0 chunk 140)
 
 // ---- cache state (indexed by sprite number; "group" entries use the group's first sprite) --------
-extern uint8_t *g_sprite_ptr[MC_SPRITE_COUNT];          // DAT_000b8d3c: loaded chunk (original: pointer to the pool handle), null = not loaded
-extern uint32_t g_sprite_group_stamp[MC_SPRITE_COUNT];  // DAT_000b7cb0: g_cfg->tick of the last use (LRU)
-extern uint8_t  g_sprite_locked[MC_SPRITE_COUNT];       // DAT_000b9580: 0xff = resident (SpriteDesc.load_priority == 0xff)
-extern uint8_t  g_sprite_group_priority[MC_SPRITE_COUNT]; // DAT_000b9791: load priority set by the level's models
+extern uint8_t *g_sprite_ptr[MC_SPRITE_SLOTS];          // DAT_000b8d3c: loaded chunk (original: pointer to the pool handle), null = not loaded
+extern uint32_t g_sprite_group_stamp[MC_SPRITE_SLOTS];  // DAT_000b7cb0: g_cfg->tick of the last use (LRU)
+extern uint8_t  g_sprite_locked[MC_SPRITE_SLOTS];       // DAT_000b9580: 0xff = resident (SpriteDesc.load_priority == 0xff)
+extern uint8_t  g_sprite_group_priority[MC_SPRITE_SLOTS]; // DAT_000b9791: load priority set by the level's models
+// A port sprite (MC_SPRITE_COUNT <= sprite < MC_SPRITE_SLOTS): a copy of CHUNK (tmaps layout: u8 flags, u8 draw
+// type, u16 w, u16 h, w*h pixels); null clears it. False for another index.
+bool sprite_port_set(unsigned sprite, const uint8_t *chunk, size_t len);
 extern uint8_t  g_sprite_resident_enabled;              // DAT_000987e8 (1; mem_init_pools_59500 sets it)
 
 // Opens data/tmaps.dat + tmaps.tab (tmaps_load_4b580) and creates the cache (sprite_cache_init_4bbf0,

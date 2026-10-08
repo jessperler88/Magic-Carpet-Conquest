@@ -41,9 +41,12 @@ enum : uint8_t {
     WFEAT_LAIR,                 // creature lair (grade 1..5)
     WFEAT_TRIGGER,              // trigger area (grade = payload WTRIG_*)
     WFEAT_PORTAL,               // one end of a teleport pair (grade = pair index)
-    WFEAT_TREES,                // a grove
+    WFEAT_TREES,                // a woodland (grade = WOOD_PALM / WOOD_OAK; future lumber resource)
     WFEAT_TOWN,                 // a neutral town (effect 0x2d, the original's villager castle)
+    WFEAT_CIRCLE,               // a stone circle (grade 1 = holds a trigger area, link = its DisId; 0 = empty)
+    WFEAT_URN,                  // a spell urn, a level pickup (grade = tier 1..3, link = spell id)
 };
+enum : uint8_t { WOOD_PALM = 0, WOOD_OAK = 1 };
 enum : uint8_t {               // trigger payloads (data-driven table in worldgen.cpp)
     WTRIG_MANA = 1, WTRIG_AMBUSH, WTRIG_EARTHQUAKE, WTRIG_VOLCANO, WTRIG_STORM, WTRIG_CRATERS, WTRIG_ELITE, WTRIG_URN,
     WTRIG_COUNT
@@ -80,6 +83,13 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
 
 // The layout of the last worldgen_build in this process (tests / dumps / the debug overlay).
 const WorldLayout &worldgen_last_layout();
+// After the level start spawned the records (mode_level.cpp's level-start hook): the trees of the oak woods take
+// the oak sprite (SpriteDesc MC_SPRITE_DESC_OAK: Hidden Worlds' broadleaf tree, world_art.h; its extents are the
+// palm's, so the simulation does not depend on whether Hidden Worlds is installed). Returns the trees changed.
+int worldgen_apply_woods();
 
 // sim.cpp: the level start asks this before terrain_build; true = the world was built (terrain_build skipped).
 extern bool (*g_hook_level_world)();
+// sim.cpp: every level start tells the renderer side whether a generated world is on (engine.h world_art_apply;
+// null without a renderer). Render-only: the simulation never depends on it.
+extern void (*g_hook_level_art)(bool generated_world);

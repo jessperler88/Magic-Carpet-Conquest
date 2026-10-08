@@ -58,7 +58,8 @@ static void test_cache() {
         if (g == i) groups++;
         CHECK(sprite_chunk_size(i) > 6);
     }
-    CHECK(sprite_group_of(MC_SPRITE_COUNT) == 0);
+    CHECK(sprite_group_of(MC_SPRITE_SLOTS) == 0);
+    CHECK(sprite_group_of(MC_SPRITE_OAK) == MC_SPRITE_OAK);    // port sprites (world_art): their own group
     // resident groups are loaded by sprite_cache_init and nothing else is
     int locked = 0, resident_sprites = 0;
     for (unsigned i = 0; i < MC_SPRITE_COUNT; i++) {

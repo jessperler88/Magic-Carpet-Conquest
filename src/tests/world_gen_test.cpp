@@ -10,7 +10,8 @@
 //     wizard flown into one fires it (the mode rule: bots fire switches) and the payload is spawned;
 //  5. determinism: the same params build identical maps and records, and 600 ticks of the 1024 world run twice
 //     give identical net_state_checksum sequences;
-//  6. world_gen_<size>.png in the scratch dir (heights, water, features) to look at.
+//  6. world_gen_<size>.png in the scratch dir (heights, water, features) to look at;
+//  7. scenery / terrain art (check_scenery): stone circles, spell urns, palm / oak woods, peaks, snow.
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -292,6 +293,54 @@ static void check_triggers_and_portals() {
     CHECK(portals_ok > 0);
 }
 
+// 7. Scenery and terrain art (user, 2026-10-08): stone circles (standing stones only there, lone ones rare; ~60 %
+// hold a trigger), spell urns graded by distance (pickups on the ground), woods of one type each (oak woods re-skinned
+// by worldgen_apply_woods to MC_SPRITE_DESC_OAK with the palm's extents), taller peaks (above the old 0xc4), snow
+// (class 6) only on high ground and steep rock as class 1 (Hidden Worlds' classification).
+static void check_scenery() {
+    ModeParams mp;
+    mp.seed = 49; mp.world_size = 512; mp.bots = 6; mp.humans = 1;
+    CHECK(start(mp));
+    const WorldLayout &L = worldgen_last_layout();
+    int circles = 0, trig_circles = 0, urns[4] = {}, woods[2] = {};
+    for (const WorldFeature &f : L.features) {
+        if (f.kind == WFEAT_CIRCLE) { circles++; trig_circles += f.grade; }
+        if (f.kind == WFEAT_URN && f.grade <= 3) urns[f.grade]++;
+        if (f.kind == WFEAT_TREES && f.grade <= 1) woods[f.grade]++;
+    }
+    // stones: standing stones (type 1) within 5 cells of a circle centre vs elsewhere
+    int stones_in = 0, stones_out = 0, oaks = 0, palms = 0, spells_ground = 0;
+    for (int i = 1; i < thing_pool_slots(); i++) {
+        const Thing *t = thing_at((unsigned)i);
+        if (t->cls == 12) spells_ground++;
+        if (t->cls != 2) continue;
+        if (t->type == 0) { if (t->sprite == MC_SPRITE_DESC_OAK) oaks++; else palms++; }
+        if (t->type != 1) continue;
+        bool in = false;
+        for (const WorldFeature &f : L.features)
+            if (f.kind == WFEAT_CIRCLE && world_dist_sq(world_signed(t->x - f.x * 256), world_signed(t->y - f.y * 256)) <= 0x500 * 0x500) in = true;
+        (in ? stones_in : stones_out)++;
+    }
+    int hmax = 0, snow = 0, snow_low = 0, cliff = 0;
+    for (uint32_t c = 0; c < g_world.cells; c++) {
+        hmax = std::max<int>(hmax, g_map_height[c]);
+        const int cls = g_map_flags[c] & 7;
+        if (cls == 6) { snow++; if (g_map_height[c] <= g_state->level.gen.snlin) snow_low++; }
+        if (cls == 1) cliff++;
+    }
+    std::printf("scenery 512: %d stone circles (%d with a trigger), standing stones %d in circles / %d alone; urns %d / %d / %d "
+                "(%d spells on the ground); woods %d palm / %d oak, trees %d palm / %d oak; peak %d, snow line %d, %d snow cells "
+                "(%d below the line), %d rock / cliff edge\n", circles, trig_circles, stones_in, stones_out, urns[1], urns[2],
+                urns[3], spells_ground, woods[0], woods[1], palms, oaks, hmax, (int)g_state->level.gen.snlin, snow, snow_low, cliff);
+    CHECK(circles >= 8 && trig_circles * 100 >= circles * 35 && trig_circles * 100 <= circles * 85);
+    CHECK(stones_in > 8 * circles / 2 && stones_out * 10 <= stones_in);
+    CHECK(urns[1] >= urns[2] && urns[2] > 0 && urns[3] > 0 && spells_ground >= urns[1] + urns[2] + urns[3]);
+    CHECK(woods[0] > 0 && woods[1] > 0 && oaks > 50 && palms > 50);
+    CHECK(mc_sprite_desc(MC_SPRITE_DESC_OAK)->half_z == mc_sprite_desc(0x53)->half_z);
+    CHECK(hmax > 0xc4 && snow > 100 && snow_low * 50 <= snow && cliff > 0);   // (spike smoothing lowers a few after)
+    mode_stop_run();
+}
+
 static void check_determinism() {
     ModeParams mp;
     mp.seed = 5; mp.world_size = 1024; mp.bots = 3; mp.humans = 1;
@@ -367,6 +416,7 @@ int main(int argc, char **argv) {
         mode_stop_run();
     }
     check_triggers_and_portals();
+    check_scenery();
     check_determinism();
     if (g_fail) { std::printf("world_gen_test: %d FAILED\n", g_fail); return 1; }
     std::printf("world_gen_test: all passed\n");

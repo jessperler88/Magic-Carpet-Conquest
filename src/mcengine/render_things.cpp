@@ -561,7 +561,7 @@ static bool thing_select_sprite(const Thing *t, const SpriteDesc *d, int32_t z, 
         n = base + t->frame;
         break;
     }
-    if (n >= MC_SPRITE_COUNT) return false; // port: the exe indexes DAT_000b8d3c unchecked
+    if (n >= MC_SPRITE_SLOTS) return false; // port: the exe indexes DAT_000b8d3c unchecked; + port sprites (world_art.h)
     if (!g_sprite_ptr[n] && !sprite_ensure_loaded(n)) return false;
     g_sprite_group_stamp[sprite_group_of(n)] = g_cfg->tick;      // DAT_000b7cb0[group] = cfg+4
     if (upright) b.upright = 1;

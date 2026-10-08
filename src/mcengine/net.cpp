@@ -604,6 +604,9 @@ uint32_t state_checksum(NetChecksumParts *parts) {
         // round 11: the combat-music timer - every hit sets it, only the local player's flyer counts it down
         // (player_flyer_move); read by the music only (first seen as a desync in world_net_test)
         std::memset(P + offsetof(PlayerBlock, combat_music), 0, sizeof r.blk.combat_music);
+        // the sound proximities of fire / ridges: measured for the local player only (player_note_fire_distance)
+        std::memset(P + offsetof(PlayerBlock, fire_dist), 0, sizeof r.blk.fire_dist);
+        std::memset(P + offsetof(PlayerBlock, ridge_dist), 0, sizeof r.blk.ridge_dist);
         H.add(part, P, sizeof P);
         if (wide) {                                         // round 11: start position high halves (world.h)
             const uint16_t hi[2] = {g_world_hi.start_x[p], g_world_hi.start_y[p]};

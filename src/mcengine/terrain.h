@@ -19,7 +19,8 @@ void terrain_classify_flat(int threshold);                                 // 30
 void terrain_mark_lowland(int max_h, int max_range);                       // 31650
 void terrain_insert_transitions();                                         // 30c50
 void terrain_mark_interior(int max_h, int max_range);                      // 31800
-void terrain_mark_steep(int min_range);                                    // 31ad0 (Hidden Worlds: 0x33570)
+// hw_classes: Hidden Worlds' rule (steep = class 1, class 6 free for snow); default = world_hidden()
+void terrain_mark_steep(int min_range, int hw_classes = -1);               // 31ad0 (Hidden Worlds: 0x33570)
 void terrain_mark_snow(int snlin, int snflt);                              // Hidden Worlds only: HIDDEN.EXE 0x31c10
 void terrain_flags_fill_holes();                                           // 308f0
 void terrain_smooth_spikes();                                              // 30500
@@ -29,7 +30,10 @@ void terrain_mark_water_anim();                                            // 30
 void terrain_build_lightmap();                                             // 31310
 
 // The passes of terrain_build after the rivers (flatten water quads .. light map), in the original's order.
-void terrain_build_passes(const GenMap &gen);
+// snow: Hidden Worlds' classification and snow pass (gen.snlin / snflt) on any data set - a generated Conquest
+// world caps its peaks with snow (the snow tiles come from the Hidden Worlds textures, world_art.h). The campaign
+// uses world_hidden() as before.
+void terrain_build_passes(const GenMap &gen, bool snow = false);
 
 // ---- round 11 session 2 (B4): a generated N-cell world (port-only, driven by worldgen.cpp) ----------------
 struct TerrainWorldGen {
@@ -43,8 +47,9 @@ struct TerrainWorldGen {
 // original's square-then-diamond order per level; the noise per level is the original's step * 32 up to step
 // 128 and coarse_pct % of 4096 above, so a wide world keeps the campaign's local relief and gains continents.
 void terrain_fractal_world(int32_t *field, const TerrainWorldGen &p);
-// FIELD -> g_map_height 0..0xc4: the maximum maps to 0xc4; sea level = 0 (the original's rule) for
-// water_pct 0, else the value below which water_pct % of the cells lie.
+// FIELD -> g_map_height: the maximum maps to 0xc4, then heights above 0x60 get a quadratic lift (0xc4 -> 0xec:
+// taller peaks); sea level = 0 (the original's rule) for water_pct 0, else the value below which water_pct % of
+// the cells lie.
 void terrain_normalise_world(const int32_t *field, int water_pct);
 // Rivers on any N: begin (classes from the heights, all cells unvisited), trace from chosen sources (false =
 // the source is protected: g_map_type 0 set by the caller), end (g_map_type := 0xff as the original).

@@ -544,7 +544,7 @@ bool pick_sprite(const Thing *t, const SpriteDesc *d, bool shadow, SpritePick &o
         n = base + t->frame;
         break;
     }
-    if (n >= MC_SPRITE_COUNT) return false;
+    if (n >= MC_SPRITE_SLOTS) return false;                  // + the port sprites (world_art.h)
     if (!g_sprite_ptr[n] && !sprite_ensure_loaded(n)) return false;
     g_sprite_group_stamp[sprite_group_of(n)] = g_cfg->tick;
     uint8_t *s = g_sprite_ptr[n];

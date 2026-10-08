@@ -378,6 +378,8 @@ static uint32_t legacy_checksum() {
         P[offsetof(PlayerBlock, damage_flash)] = 0;
         std::memset(P + offsetof(PlayerBlock, spell_flash), 0, sizeof r.blk.spell_flash);
         std::memset(P + offsetof(PlayerBlock, combat_music), 0, sizeof r.blk.combat_music);   // round 11 session 3
+        std::memset(P + offsetof(PlayerBlock, fire_dist), 0, sizeof r.blk.fire_dist);
+        std::memset(P + offsetof(PlayerBlock, ridge_dist), 0, sizeof r.blk.ridge_dist);
         h = legacy_fnv(h, P, sizeof P);
     }
     h = legacy_fnv(h, g_map_type, MC_MAP_CELLS);

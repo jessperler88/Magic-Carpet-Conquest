@@ -52,6 +52,7 @@ void level_start() {
     const uint32_t ws = g_mode.params.world_size;
     if (!mode_params_generated(g_mode.params) && ws > 256 && ws <= (uint32_t)MC_WORLD_MAX && !(ws & (ws - 1)))
         world_widen_tiled((int)ws);
+    if (mode_params_generated(g_mode.params)) worldgen_apply_woods();   // the oak woods' trees (worldgen.h)
     g_mode.template_level = (uint32_t)mode_template_level(s_game_dir.c_str(), g_mode.params);
     // the AI's crt_rand seed (outside GameState) from the match seed: a mode run never depends on what ran
     // before it in the process (the campaign leaves it wherever its last level left it)

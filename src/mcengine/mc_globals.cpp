@@ -122,7 +122,9 @@ void mc_globals_init() {
     std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
     std::memset(g_work_buf, 0, sizeof g_work_buf);
     std::memcpy(g_uv_table, g_uv_table_data, sizeof g_uv_table);
-    std::memcpy(g_sprite_desc, g_sprite_desc_data, sizeof g_sprite_desc);
+    static_assert(sizeof g_sprite_desc_data == MC_SPRITE_DESC_ORIGINAL * sizeof(SpriteDesc));
+    std::memset(g_sprite_desc, 0, sizeof g_sprite_desc);
+    std::memcpy(g_sprite_desc, g_sprite_desc_data, sizeof g_sprite_desc_data);
     // config_parse_33750 defaults
     g_state->view_size = 0x28;
     g_state->opt_shadows = g_state->opt_hud_a = g_state->opt_hud_b = 1;

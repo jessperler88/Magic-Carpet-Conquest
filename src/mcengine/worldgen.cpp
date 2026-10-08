@@ -9,10 +9,12 @@
 #include <cstring>
 
 bool (*g_hook_level_world)() = nullptr;
+void (*g_hook_level_art)(bool) = nullptr;
 
 namespace {
 
 WorldLayout s_last;
+std::vector<uint8_t> s_oak;     // 1 = a cell of an oak wood (worldgen_apply_woods), g_world.cells entries
 
 // ---- the generator's LCG (its own: never g_rng16, never the mode's ModeRng) -------------------------------
 struct Rng {
@@ -441,21 +443,62 @@ void place_features(Placer &P, int players) {
         }
     }
 
-    // trigger areas: a hidden one-shot switch (type 0, "hidden inside": fires for a wizard flying into its box)
-    // with a payload group of its own DisId
-    for (int k = 0; k < orbits_for(s.triggers); k++) {
-        if (!P.pick_orbit(40, 150, 14, true, orb, &n)) continue;
+    // stone circles (user, 2026-10-08: the standing stones only in circles, a lone one very rarely): a ring of 7-11
+    // standing stones, a dolmen in the centre of every third; 60 % of them hold a trigger area - a hidden one-shot
+    // switch (type 0, "hidden inside": fires for a wizard flying into its box) in the centre with a payload group of
+    // its own DisId. About `triggers` trigger areas per seat (5 circles per 3 triggers).
+    const int circles = s.triggers ? (s.triggers * 5 + 2) / 3 : 2;
+    const int corbits = orbits_for(circles), torbits = orbits_for(s.triggers);
+    std::vector<uint8_t> holds((size_t)corbits, 0);        // exactly `triggers` of them (60 %), at random
+    for (int k = 0; k < corbits; k++) holds[(size_t)k] = k < torbits;
+    for (int k = corbits - 1; k > 0; k--) std::swap(holds[(size_t)k], holds[(size_t)P.rng.below(k + 1)]);
+    for (int k = 0; k < corbits; k++) {
+        if (!P.pick_orbit(35, 150, 16, true, orb, &n)) continue;
+        const bool trig = holds[(size_t)k] != 0;
         const int band = band_of(P.band_pct(orb[0].x, orb[0].y));
-        const int kind = pick_payload(P, band);
-        for (int i = 0; i < n && P.next_dis < 0x7fff; i++) {
-            if (P.free_records() < 24) break;
-            const uint16_t dis = (uint16_t)P.next_dis++;
-            P.feature(WFEAT_TRIGGER, (uint8_t)kind, orb[i].x, orb[i].y, dis);
-            P.add(11, 0, orb[i].x, orb[i].y, 0, 2, dis);
-            Rng saved = P.rng;      // every seat's payload is the same group, mirrored
-            place_payload(P, kind, band, orb[i].x, orb[i].y, dis);
-            if (i + 1 < n) P.rng = saved;
+        const int kind = trig ? pick_payload(P, band) : 0;
+        const int stones = P.rng.range(7, 11), r = stones > 8 ? 4 : 3, phase = P.rng.below(0x800);
+        const bool dolmen = P.rng.below(3) == 0;
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < stones; j++) {
+                const unsigned a = (unsigned)(phase + j * 0x800 / stones);
+                const int sx = orb[i].x + (int)(((int64_t)mc_sin(a) * r + 0x8000) >> 16);
+                const int sy = orb[i].y + (int)(((int64_t)mc_sin(a + 0x200) * r + 0x8000) >> 16);
+                if (P.land(sx, sy)) P.add_extra(2, 1, sx, sy);
+            }
+            if (dolmen) P.add_extra(2, 2, orb[i].x, orb[i].y);
+            uint16_t dis = 0;
+            if (trig && P.next_dis < 0x7fff && P.free_records() >= 24) {
+                dis = (uint16_t)P.next_dis++;
+                P.feature(WFEAT_TRIGGER, (uint8_t)kind, orb[i].x, orb[i].y, dis);
+                P.add(11, 0, orb[i].x, orb[i].y, 0, 2, dis);
+                Rng saved = P.rng;      // every seat's payload is the same group, mirrored
+                place_payload(P, kind, band, orb[i].x, orb[i].y, dis);
+                if (i + 1 < n) P.rng = saved;
+            }
+            P.feature(WFEAT_CIRCLE, dis ? 1 : 0, orb[i].x, orb[i].y, dis);
         }
+    }
+
+    // spell urns (user, 2026-10-08): level pickups (class 12; every wizard can take one, a copy stays for the
+    // others), graded by distance from the seats - per seat two near ones, one on contested ground, one far out.
+    // The same spell for a whole orbit (fair). Not Smart Bomb (22): its phase-2 pickup is unbound in the 1996 engine.
+    {
+        static const uint8_t kTier1[] = {0x01, 0x04, 0x05, 0x0d, 0x0e, 0x0f, 0x13};     // heal shield sight steal rebound lightning magnet
+        static const uint8_t kTier2[] = {0x06, 0x09, 0x0a, 0x0b, 0x0c, 0x11, 0x14};     // quake crater teleport rubber invisible skeleton fire wall
+        static const uint8_t kTier3[] = {0x07, 0x08, 0x12};                             // meteor volcano thunderbolt
+        struct Tier { const uint8_t *ids; int count, lo, hi, per_seat; };
+        const Tier tiers[3] = {{kTier1, (int)sizeof kTier1, 25, 60, 2}, {kTier2, (int)sizeof kTier2, 60, 100, 1},
+                               {kTier3, (int)sizeof kTier3, 100, 170, 1}};
+        for (int t = 0; t < 3; t++)
+            for (int k = 0; k < orbits_for(tiers[t].per_seat); k++) {
+                if (!P.pick_orbit(tiers[t].lo, tiers[t].hi, 10, true, orb, &n, 256)) continue;
+                const uint8_t id = tiers[t].ids[P.rng.below(tiers[t].count)];
+                for (int i = 0; i < n && P.free_records() >= 24; i++) {
+                    P.add(12, id, orb[i].x, orb[i].y);
+                    P.feature(WFEAT_URN, (uint8_t)(t + 1), orb[i].x, orb[i].y, id);
+                }
+            }
     }
 
     // lairs: creature packs graded 1..5 by distance from the seats, Poisson-disc spaced
@@ -473,8 +516,8 @@ void place_features(Placer &P, int players) {
 
     // Scenery and wild creatures go to the extra records (thing.h level_extra_records_set), not the level file's
     // 1999: per 256 x 256 cells (the campaign's multiplayer maps have ~80 trees, ~40 stones, ~90 free creatures)
-    // 12 groves of 6-14 trees, 40 lone stones / dolmens / trees and 40 wild creatures (x wild %), all scaled down
-    // together to fit a third of the pool.
+    // the trees of 12 groves of ~10 (as 8 woods of 10-22 below), 40 lone trees (a stone or dolmen 1 in 40) and 40
+    // wild creatures (x wild %), all scaled down together to fit a third of the pool. Stone circles are extra.
     int groves = 12 * area, singles = 40 * area, wild = 40 * area * s.wild_pct / 100;
     const int want = groves * 10 + singles + wild, cap = mode_generated_world_slots((uint32_t)g_world.size) / 3;
     if (want > cap) {
@@ -488,27 +531,53 @@ void place_features(Placer &P, int players) {
         const Pack &pk = kPacks[grade - 1][P.rng.below(3)];
         for (int i = 0; i < n; i++) P.add_extra(5, pk.model, orb[i].x, orb[i].y);
     }
-    for (int k = 0; k < groves / g; k++) {
-        if (!P.pick_orbit(25, 200, 8, true, orb, &n, 16)) continue;
-        const int trees = P.rng.range(6, 14), r = trees > 10 ? 4 : 3;
+    // Woodlands (user, 2026-10-08: clusters of each tree type, future lumber): each wood is one type - palms on the
+    // low ground near the coast, oaks (Hidden Worlds' broadleaf tree, worldgen_apply_woods) inland and higher up.
+    // Fewer but bigger woods than session 2's groves (the same number of trees).
+    // the type by the land's median height: palms below it, oaks above (about half of each, palms near the coast)
+    int median = 0x40;
+    {
+        uint32_t hist[256] = {}, land = 0, acc = 0;
+        for (uint32_t c = 0; c < g_world.cells; c++) if (g_map_height[c]) { hist[g_map_height[c]]++; land++; }
+        for (median = 1; median < 255 && acc + hist[median] < land / 2; median++) acc += hist[median];
+    }
+    const int woods = std::max(groves * 2 / 3, g);
+    for (int k = 0; k < woods / g; k++) {
+        // alternate the wanted type; look for a site on its side of the median (else take the last site found)
+        const uint8_t wanted = (k & 1) ? WOOD_OAK : WOOD_PALM;
+        bool found = false, fits = false;
+        for (int a = 0; a < 12 && !fits; a++) {
+            if (!P.pick_orbit(25, 200, 12, true, orb, &n, 16)) continue;
+            found = true;
+            fits = (g_map_height[world_cell(orb[0].x, orb[0].y)] < median) == (wanted == WOOD_PALM);
+        }
+        if (!found) continue;
+        const int trees = P.rng.range(10, 22), r = trees > 16 ? 6 : 5;
+        const uint8_t type = g_map_height[world_cell(orb[0].x, orb[0].y)] < median ? WOOD_PALM : WOOD_OAK;
         const Rng saved = P.rng;
         for (int i = 0; i < n; i++) {
             P.rng = saved;
-            P.feature(WFEAT_TREES, 0, orb[i].x, orb[i].y);
+            P.feature(WFEAT_TREES, type, orb[i].x, orb[i].y);
             for (int t = 0; t < trees; t++) {
                 const Cell c = P.scatter(orb[i].x, orb[i].y, r);
-                P.add_extra(2, P.rng.below(12) == 0 ? 1 : 0, c.x, c.y);   // trees, now and then a standing stone
+                P.add_extra(2, 0, c.x, c.y);
+                if (type == WOOD_OAK) s_oak[world_cell(c.x, c.y)] = 1;
             }
         }
     }
     for (int k = 0; k < singles / g; k++) {
-        // lone scenery: no spacing to other features (the feature list would grow by thousands), land only
+        // lone scenery: no spacing to other features (the feature list would grow by thousands), land only; trees
+        // (an oak above the palm line), a standing stone or dolmen only 1 time in 40
         const int x = P.rng.below(g_world.size), y = P.rng.below(g_world.size);
-        const int roll = P.rng.below(10);
-        const uint16_t model = roll < 5 ? 0 : (roll < 9 ? 1 : 2);        // tree, standing stone, dolmen
+        const int roll = P.rng.below(40);
+        const uint16_t model = roll < 39 ? 0 : (P.rng.below(2) ? 1 : 2);   // tree, standing stone, dolmen
         n = orbit(P.out.symmetry, x, y, orb);
         if (P.band_pct(x, y) < 20) continue;
-        for (int i = 0; i < n; i++) if (P.land(orb[i].x, orb[i].y)) P.add_extra(2, model, orb[i].x, orb[i].y);
+        for (int i = 0; i < n; i++) {
+            if (!P.land(orb[i].x, orb[i].y)) continue;
+            P.add_extra(2, model, orb[i].x, orb[i].y);
+            if (model == 0 && g_map_height[world_cell(orb[i].x, orb[i].y)] >= median) s_oak[world_cell(orb[i].x, orb[i].y)] = 1;
+        }
     }
 }
 
@@ -562,7 +631,7 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     gen.gnarl = 16;             // second noise amplitude (x roughness %); the campaign uses 0..59
     gen.river = 20;             // per 256 x 256 cells; sources above height 40
     gen.sourc = 40;
-    gen.snlin = 200;            // snow line (Hidden Worlds data set only): off
+    gen.snlin = 200;            // snow line: set from the heights below (the top 6 % of the land)
     gen.snflt = 45;             // terrain_classify_flat: cross range below = flat land
     gen.bhlin = 25;             // lowland / interior: 3x3 max below ...
     gen.bhflt = 13;             // ... with a range up to this
@@ -604,7 +673,20 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     lay.seats = (int)P.seats.size();
     flatten_plateaus(P.seats);
     place_rivers(P, gen);
-    terrain_build_passes(gen);
+    // Snow caps (user, 2026-10-08): Hidden Worlds' snow pass on the highest land - the snow line is the height above
+    // which the top 6 % of the land cells lie (flat enough ones turn to snow: cross range below snflt); Hidden Worlds'
+    // classification comes with it (steep rock = class 1, snow = class 6). The snow tiles are drawn from the Hidden
+    // Worlds textures when installed (world_art.h); the classes are the same either way.
+    {
+        uint32_t hist[256] = {}, land = 0;
+        for (uint32_t i = 0; i < g_world.cells; i++) if (g_map_height[i]) { hist[g_map_height[i]]++; land++; }
+        uint32_t acc = 0;
+        int h = 255;
+        while (h > 1 && acc + hist[h] <= land * 6 / 100) acc += hist[h--];
+        gen.snlin = std::max(h, 0x90);
+    }
+    s_oak.assign(g_world.cells, 0);
+    terrain_build_passes(gen, true);
     place_features(P, s.players);
     level_extra_records_set(P.extra.data(), P.extra.size());
     lay.records = P.nrec;
@@ -615,3 +697,15 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
 }
 
 const WorldLayout &worldgen_last_layout() { return s_last; }
+
+int worldgen_apply_woods() {
+    if (s_oak.size() != g_world.cells) return 0;
+    int n = 0;
+    for (int i = 1; i < thing_pool_slots(); i++) {
+        Thing *t = thing_at((unsigned)i);
+        if (t->cls != 2 || t->type != 0 || !s_oak[world_cell_of(t->x, t->y)]) continue;
+        thing_set_sprite(t, MC_SPRITE_DESC_OAK);
+        n++;
+    }
+    return n;
+}

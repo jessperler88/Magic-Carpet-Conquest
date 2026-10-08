@@ -367,7 +367,7 @@ def index_suffix(dims, i):
 
 
 # What net_state_checksum hashes (net.cpp state_checksum).
-LOCAL_P = ("start_tick", "castle_hit_flash", "hit_flash", "damage_flash", "spell_flash", "combat_music")
+LOCAL_P = ("start_tick", "castle_hit_flash", "hit_flash", "damage_flash", "spell_flash", "combat_music", "fire_dist", "ridge_dist")
 HASHED_HEAD = ("win_timer", "status", "active", "index", "is_computer", "thing")
 
 

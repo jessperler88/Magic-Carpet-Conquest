@@ -189,7 +189,8 @@ NetSyncStats net_sync_stats();
 // name / input mode, the level track (music availability), the command packets, PlayerBlock.start_tick
 // (real time), the HUD flash counters PlayerBlock +0x187..+0x189 and spell_flash[] (hud_tick_state
 // counts them down for the local player only), PlayerBlock.combat_music (+0x2e: only the local player's
-// flyer counts it down; round 11), and Thing.flags bit 0 of the human flyers (class 3 type
+// flyer counts it down; round 11), fire_dist / ridge_dist (the local player's sound proximities), and
+// Thing.flags bit 0 of the human flyers (class 3 type
 // 0: "this is the local player", player_spawn_3f360) and of the spells (class 12: "the local player
 // owns it", spell pickup) - also of free slots (class 0), which keep it after the free (round 11).
 uint32_t net_state_checksum();

@@ -102,7 +102,9 @@ void level_start_from_state(int index) {
     g_cfg->level = (uint16_t)index;
     // port (Phase 4 round 11): a mode level with a generated world is built by worldgen.cpp (world size, maps and
     // the placed THING_INIT records); the campaign and template mode levels go through terrain_build
-    if (!(g_hook_level_world && g_hook_level_world())) terrain_build(g_state->level.gen);
+    const bool generated = g_hook_level_world && g_hook_level_world();
+    if (!generated) terrain_build(g_state->level.gen);
+    if (g_hook_level_art) g_hook_level_art(generated);     // port: render-only art of a generated world (engine.h)
     thing_pool_reset();
     terrain_generate_features();                 // "Generate features"
     std::memset(&g_pos_scratch, 0, sizeof g_pos_scratch);

@@ -153,6 +153,9 @@ Visual Studio 18 Build Tools, CMake 4.3.
   their first castle on their seat; every seat of a generated world starts with the Castle spell; the free camera
   flies faster with Ctrl. New tests: `world_test` (all 140 levels identical to the pre-round-11 code),
   `world_net_test`, `reference_world`. 69 ctest tests. Reports `docs/analysis/port_world_{session3,test,refwide}.md`.
+- Generated worlds now have spell urns graded by distance, standing stones in stone circles (60 % hide a trigger),
+  palm and oak woods (the oak is Hidden Worlds' tree), taller peaks with Hidden Worlds' snow on top (snow and oak
+  art need the Hidden Worlds files installed; without them the world plays the same with base-game art).
 
 - **Generated worlds** (`src/mcengine/worldgen.h`): `mcport <dir> rts --size 1024 --bots 3` builds a seeded
   1024-cell world (512 .. 4096; `--generate` for a generated 256 world, `--tiled` for the old tiled test bed): a torus

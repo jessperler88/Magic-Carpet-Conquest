@@ -208,6 +208,10 @@ generated world gives every seat spells 0 / 3 / Castle, all allowed (template 59
 original's half-world separation line removed for N > 256; perception / spell ranges and the nearest-anywhere
 searches kept (bot hunt radius = round 17). **Gate met**: two headless `mcport rts --net 2 --seed 1 --size 1024
 --bots 3` ran 4000 ticks with no desync and identical final checksums; the free camera wraps the world (Ctrl x4).
+Follow-up after the user's play (same day, session3 report section 6): spell urns graded by distance, stone circles
+(60 % with a trigger; lone stones rare), palm / oak woods (oak = Hidden Worlds' tree, port SpriteDesc 285 / port
+sprite slot), taller peaks, Hidden Worlds' snow classification + snow tiles (render-only art overlay `world_art_apply`).
+User note: bots felt passive (few spells, template aggression, distance) - round 17.
 
 - [x] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `world_cell_x/y`,
       `world_cx`, `world_signed` (= the original's `(int16_t)` at 256), `world_dist_sq` int64), replacing `mc_cell`,

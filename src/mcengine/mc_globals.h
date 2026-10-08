@@ -47,7 +47,12 @@ const QuadStep   *mc_quad_steps();            // 4 entries
 // The sprite descriptor table (DAT_00097678) is patched at load time by
 // sprite_table_init_sizes_4bd10 (missing extent from the tmap aspect ratio, draw_type from the tmap
 // header), so the port keeps a run-time copy of the extracted table.
-constexpr int MC_SPRITE_DESC_COUNT = 285;
+constexpr int MC_SPRITE_DESC_ORIGINAL = 285;          // the exe's table
+// Port-only descriptors after it: the oak of a generated world's woods (worldgen.h). sprite_table_init_sizes
+// copies the palm's (0x53) into it, so its extents never depend on the data installed; world_art.h points its
+// base_sprite at Hidden Worlds' broadleaf tree when that is available (else it stays the palm, sprite 140).
+constexpr int MC_SPRITE_DESC_OAK = 285;
+constexpr int MC_SPRITE_DESC_COUNT = 286;
 extern SpriteDesc g_sprite_desc[MC_SPRITE_DESC_COUNT];
 inline SpriteDesc *mc_sprite_desc(unsigned i) { return &g_sprite_desc[i < MC_SPRITE_DESC_COUNT ? i : 0]; }
 const MoveDesc   *mc_move_desc(unsigned i);   // 30 entries

@@ -333,8 +333,8 @@ void terrain_mark_interior(int max_h, int max_range) {
 // changes nothing.
 static void steep_to_cliff_edge(uint32_t i);
 
-void terrain_mark_steep(int min_range) {
-    const bool hidden = world_hidden();
+void terrain_mark_steep(int min_range, int hw_classes) {
+    const bool hidden = hw_classes < 0 ? world_hidden() : hw_classes != 0;
     std::memcpy(g_map_type, g_map_flags, g_world.cells);
     for (uint32_t i = 0; i < g_world.cells; ++i) {
         int range = cross_range(world_cell_x(i), world_cell_y(i));
@@ -561,14 +561,15 @@ void terrain_build(const GenMap &gen) {
 // The tail of terrain_build_303f0 after the rivers: classification, clean-up, textures, water animation and the
 // light map (port: shared with the generated world of worldgen.cpp; the original's order, g_rng16 continues from
 // the river pick).
-void terrain_build_passes(const GenMap &gen) {
+void terrain_build_passes(const GenMap &gen, bool snow) {
+    const bool hw = snow || world_hidden();
     terrain_flatten_water_quads();
     terrain_classify_flat((uint16_t)gen.snflt);
     terrain_mark_lowland((uint16_t)gen.bhlin, (uint16_t)gen.bhflt);
     terrain_insert_transitions();
     terrain_mark_interior((uint16_t)gen.bhlin, (uint16_t)gen.bhflt);
-    terrain_mark_steep((uint16_t)gen.rkste);
-    if (world_hidden()) terrain_mark_snow((uint16_t)gen.snlin, (uint16_t)gen.snflt);   // Hidden Worlds
+    terrain_mark_steep((uint16_t)gen.rkste, hw ? 1 : 0);
+    if (hw) terrain_mark_snow((uint16_t)gen.snlin, (uint16_t)gen.snflt);              // Hidden Worlds / snow caps
     terrain_flags_fill_holes();
     std::memset(g_map_type, 0, g_world.cells);
     terrain_smooth_spikes();
@@ -639,6 +640,9 @@ void terrain_normalise_world(const int32_t *field, int water_pct) {
         int64_t v = range > 0 ? ((int64_t)field[i] - sea) * 0xc4 / range : 0;
         if (v < 0) v = 0;
         if (v > 0xc4) v = 0xc4;
+        // taller peaks (user, 2026-10-08): above 0x60 a quadratic lift, +40 at the top (0xc4 -> 0xec); the
+        // lowlands, the coast and the spawn plateaus (0x28..0x90) barely change
+        if (v > 0x60) v += (v - 0x60) * (v - 0x60) * 40 / ((0xc4 - 0x60) * (0xc4 - 0x60));
         g_map_height[i] = (uint8_t)v;
     }
 }
