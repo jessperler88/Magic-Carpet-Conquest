@@ -338,6 +338,30 @@ static void check_scenery() {
     CHECK(woods[0] > 0 && woods[1] > 0 && oaks > 50 && palms > 50);
     CHECK(mc_sprite_desc(MC_SPRITE_DESC_OAK)->half_z == mc_sprite_desc(0x53)->half_z);
     CHECK(hmax > 0xc4 && snow > 100 && snow_low * 50 <= snow && cliff > 0);   // (spike smoothing lowers a few after)
+    // the urns are pickups (phase 2): the human's wizard flown onto the nearest tier-1 urn owns its spell after it,
+    // and the urn stays for the others (user report: "moving into a spell urn doesn't collect it")
+    int picked = 0, tried = 0, still_there = 0;
+    for (const WorldFeature &f : L.features) {
+        if (f.kind != WFEAT_URN || tried >= 3) continue;
+        Thing *w = wizard(0);
+        PlayerBlock *P = player_block(w);
+        if (P->spell_thing[f.link] != 0) continue;          // an orbit's urns hold one spell: owned already
+        tried++;
+        for (int i = 0; i < 40 && P->spell_thing[f.link] == 0; i++) {
+            Pos at = *thing_pos(w);
+            at.x = f.x * 256 + 0x80; at.y = f.y * 256 + 0x80;
+            at.z = (int16_t)(terrain_height_at(&at) + 0x40);
+            thing_move_to(w, &at);
+            game_tick_sim();
+        }
+        if (P->spell_thing[f.link] != 0) picked++;
+        for (int i = 1; i < thing_pool_slots(); i++) {
+            const Thing *s = thing_at((unsigned)i);
+            if (s->cls == 12 && s->type == f.link && world_cell_of(s->x, s->y) == world_cell(f.x, f.y) && s->state % 3 != 0) still_there++;
+        }
+    }
+    std::printf("urn pickups: %d of %d urns flown into gave the spell, %d copies left lying\n", picked, tried, still_there);
+    CHECK(tried > 0 && picked == tried && still_there >= tried);
     mode_stop_run();
 }
 

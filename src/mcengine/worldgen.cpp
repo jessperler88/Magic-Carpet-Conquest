@@ -229,6 +229,10 @@ const Pack kPacks[5][3] = {
     { {16, 1, 2}, {11, 1, 1}, {0, 2, 3}  },     // 5: wyverns, a genie, dragons
 };
 
+// A spell record's SwiId is its phase (level_spawn_thing_record: state += SwiId): 2 = a level pickup that leaves a
+// copy for the other wizards (spells.h; the campaign's urns use 1 and 2). 0 would be "owned", never picked up.
+constexpr uint16_t kUrnPhase = 2;
+
 // trigger payload weights per band (safe / contested / rich): the data-driven table of B5 (round 20 adds MC2's)
 struct PayloadWeight { uint8_t kind, w[3]; };
 const PayloadWeight kPayloads[] = {
@@ -280,7 +284,7 @@ void place_payload(Placer &P, int kind, int band, int x, int y, uint16_t dis) {
         int cand[24], n = 0;
         for (int i = 0; i < 24; i++)
             if (P.level->player_block[0][0x74 + i] == 1 && P.level->player_block[0][0x10 + i] == 0) cand[n++] = i;
-        if (n) P.add(12, (uint16_t)cand[P.rng.below(n)], x, y, dis, 0, 0);
+        if (n) P.add(12, (uint16_t)cand[P.rng.below(n)], x, y, dis, 0, kUrnPhase);
         else   P.add(10, 0x27, x, y, dis, 0, dis);
         break;
     }
@@ -495,7 +499,7 @@ void place_features(Placer &P, int players) {
                 if (!P.pick_orbit(tiers[t].lo, tiers[t].hi, 10, true, orb, &n, 256)) continue;
                 const uint8_t id = tiers[t].ids[P.rng.below(tiers[t].count)];
                 for (int i = 0; i < n && P.free_records() >= 24; i++) {
-                    P.add(12, id, orb[i].x, orb[i].y);
+                    P.add(12, id, orb[i].x, orb[i].y, 0, 0, kUrnPhase);
                     P.feature(WFEAT_URN, (uint8_t)(t + 1), orb[i].x, orb[i].y, id);
                 }
             }
