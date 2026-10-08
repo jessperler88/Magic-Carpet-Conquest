@@ -199,31 +199,40 @@ constants that do not scale: sound cull, tether, teleport gate 128 cells, spiral
 searches such as skeletons -> nearest enemy castle; castle-site quadrants growing with N; rivers / source tries
 scaling with area; `draw_distance` max 127 in config / pause menu).
 
-- [ ] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `cell_x/y`,
-      `world_diff`, `world_dist_sq` int64), replacing `mc_cell`, the three `cell_xy` clones, `(uint8_t)`
-      neighbour arithmetic and 0x10000 strides in 14 files; maps allocated at level start outside GameState
-      (faithful: the existing static arrays); `WRLD` chunk in savestates / `max%05d.dat`.
-- [ ] B2 int32 `Pos` / `Thing.x/.y` / `start_pos` / `PosLogEntry` / `Thing.home` / `ThingInit`; int32 `math_atan2`;
-      all 74 `pos_dist_*` and the nearest-search `best_d` sites to int64; AI / sound range constants reviewed.
-- [ ] B3 GameState serialise / deserialise to the original layout (precedent `thing_relink_snapshot`);
-      `reference_test`'s field table re-pointed; every gate re-validated.
+- [x] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `world_cell_x/y`,
+      `world_cx`, `world_signed` (= the original's `(int16_t)` at 256), `world_dist_sq` int64), replacing `mc_cell`,
+      the `cell_xy` clones, `(uint8_t)` neighbour arithmetic and 0x10000 strides; maps are pointers (the static
+      arrays at 256, a heap block otherwise, `world_set_size`); `WRLD` chunk in savestates, wide `gax` / `max` movie
+      snapshots (session 1).
+- [x] B2 int32 positions: `WCoord` for `Pos` / `Thing.x/.y` / `Thing.home` (wraps on every store); `start_pos` and
+      `PosLogEntry` keep their u16 image fields plus high halves in `g_world_hi`; `ThingInit` stays u16 cells (fine
+      to 65535); `math_atan2_w`; `pos_dist_sq_*` and the nearest searches int64 (session 1). Range constants kept
+      as they are - the scaling decisions are listed under session 3.
+- [x] B3 original-layout images (`mc_image.h`: `ThingImage` / `GameStateImage`, `state_to_image` / `_from_image`,
+      `state_image_read` for the original's over-reads); movies, save states, checksum and `reference_test` go
+      through them; every gate re-validated (session 1: 65/65, all reference sets identical).
 - [ ] B4 generator on N: int32 fractal scratch (or seeded coarse lattice, which doubles as a "continent scale"
       slider), k levels, river / 1000-tries constants scaled, local passes through the accessors;
-      `terrain_build(const GenMap&, const WorldParams&)`.
+      `terrain_build(const GenMap&, const WorldParams&)`. Session 1 did the local passes (task A); the fractal,
+      the normalisation and the river source pick are still 256-only and `terrain_build` refuses N > 256.
 - [ ] B5 **seeded feature placer v1** (`worldgen.cpp`, new): symmetry (point / mirror on the torus) chosen from
       the player count; spawns first, each on a flattened 24x24 plateau; mana springs in distance bands (safe /
       contested / rich), wild lairs Poisson-disc graded 1-5 by distance; towns, trees, water and lava
       thresholds, flood-fill connectivity with carve-or-reroll; `WorldParams` = seed, size, players, symmetry,
       roughness, water, spring density, wild density, lair grade curve, day length, blight on / off; exchanged in
       the lobby like `NetGameRules`. Generation runs with the extended pool.
-- [ ] B6 deterministic wake-near-any-wizard under the mode flag; `ai_wizard` quadrant logic generalised; sound
-      cull with `world_diff`.
-- [ ] B7 `render_ext` window `kWin = min(N/2, 256)`, vertex cache sizing, camera no longer truncated to u16;
-      radar / map screen scale for N (the map screen shows the whole world or a window).
+- [ ] B6 deterministic wake-near-any-wizard under the mode flag (session 3; the distance maths is already int64 /
+      torus-correct). Done in session 1: `ai_wizard` castle-site quadrants scale with the world, sound cull int64.
+- [x] B7 `render_ext` window `kWin = min(N/2, 256)`, vertex cache sizing, camera no longer truncated to u16, draw
+      distance up to 255 at N >= 512 (the ini / pause-menu maximum is still 127); radar via the accessors; the map
+      screen shows a window around the player at the original scale (whole world = the round 16 minimap);
+      interpolated camera keeps the whole coordinate (session 1).
 - [ ] B9 `world_test`: 256 through the new code == old arrays for all 69 levels; 512 / 1024 seam walks, spiral
       queries across the seam, two-instance determinism for 2000 ticks, save round trip, overflow probes at 500
       cells; `render_ext_test` on 1024 at dd 127 and 255; `MC_REF_WORLD=1024` campaign references diverge only
-      where a Thing crosses the old boundary.
+      where a Thing crosses the old boundary. Partly done in session 1: five per-subsystem tests on a tiled 1024
+      world (`world_{terrain,things,creatures,persist,render}_test`: seam walks, spiral / area queries across both
+      seams, 300-600-cell distances and angles, save / movie round trips, pixel-identical tiled frames, dd 200).
 - Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` runs, two instances stay in sync, the free camera
   flies the whole world. Effort 25-35 days (the largest round; split: accessors / positions / generator /
   placer / renderer+tests).
@@ -457,7 +466,7 @@ extension-table handler plus a `kSpells`-style row; spell Things are class 12 wi
 | round | theme | days | depends on |
 |---|---|---|---|
 | 10 | debug suite + mode skeleton + movie v3 (**done 2026-10-08**) | 8-10 | - |
-| 11 | world module, int32 positions, generator, placer | 25-35 | 10 (headless runs, tests) |
+| 11 | world module, int32 positions, generator, placer (**session 1 of 3 done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
 | 12 | menu urn, setup screen, lobby, rules v1, bots v1 | 8-12 | 11 |
 | 13 | plates, numbers, elites, drops, levels | 8-10 | 10 (hook, overlay); 11 (lairs) |
 | 14 | resources, buildings, gatherers, growth, upkeep | 12-16 | 12 |
@@ -490,10 +499,17 @@ critical path.
 
 ---
 
-## 6. Next session: round 11 briefing (round 10 briefing below is done)
+## 6. Next session: round 11 session 2 (generator on N + feature placer)
 
-Write `docs/port/BRIEFING_round10.md` from section 3 / round 10 with five tasks: (A) mode skeleton + headless
-`rts` run + JSON dumps + movie v3, (B) console + scenario files + `scenario_test`, (C) projection export +
-display pointer + inspector + overlays, (D) time control + debug camera + screenshot + log, (E) desync parts +
-diff tool + replay-check. Integrator scaffolding first: `GameplayRules.mode`, `mode.h` state block with its
-savestate chunk and checksum part, `sim_load_level_data`, and the `rts` subcommand stub in `main.cpp`.
+Work continues on branch `round11` (session 1: commits `b8cf714`, `f724143`, `acb4880`). Read
+`docs/port/BRIEFING_round11.md` and the five `docs/analysis/port_world_*.md` reports, then add a session-2 section to
+the briefing:
+- **B4**: height field for N > 256 (int32 scratch or a seeded coarse lattice under the unchanged 8-level fractal),
+  normalisation, river sources over the whole world with counts / tries scaled by area; lift the `terrain_build`
+  guard; the local passes already run on any N.
+- **B5**: `worldgen.cpp` feature placer and `WorldParams` (seed, size, players, symmetry, roughness, water, springs,
+  wild density, lair grades, day length, blight), carried by `ModeParams` / movies / save states / `NetGameRules`;
+  replaces the `world_widen_tiled` call in `mode_level.cpp`'s level-start hook.
+- `mcport rts --size N` on a generated world; screenshots of the result looked at.
+- Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2` (the user's machine maxed out with five
+  full-parallel builds in session 1).
