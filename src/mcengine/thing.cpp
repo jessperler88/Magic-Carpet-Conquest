@@ -260,7 +260,7 @@ int thing_free_count() { return free_top_logical() + 1; }
 void thing_link_cell(Thing *t, const Pos *pos) {
     if (t->flags & 4) return;
     uint16_t idx = thing_index(t);
-    uint16_t cell = mc_cell_of(pos->x, pos->y);
+    const uint32_t cell = world_cell_of(pos->x, pos->y);
     t->cell_prev = 0;
     uint16_t head = g_cell_things[cell];
     t->cell_next = head;
@@ -275,7 +275,7 @@ void thing_link_cell(Thing *t, const Pos *pos) {
 void thing_unlink_cell(Thing *t) {
     if (!(t->flags & 4)) return;
     if (t->cell_prev == 0)
-        g_cell_things[mc_cell_of(t->x, t->y)] = t->cell_next;
+        g_cell_things[world_cell_of(t->x, t->y)] = t->cell_next;
     else
         thing_at(t->cell_prev)->cell_next = t->cell_next;
     if (t->cell_next != 0)
@@ -593,14 +593,13 @@ int terrain_height_at_offset(const Pos *p, int yaw, int dist) {
     unsigned a = (unsigned)yaw & 0x7ff;
     int32_t dy = (int32_t)((uint32_t)dist * (uint32_t)mc_cos(a)) >> 16;
     int32_t dx = (int32_t)((uint32_t)dist * (uint32_t)mc_sin(a)) >> 16;
-    int16_t y = (int16_t)((int16_t)p->y - dy);
-    int16_t x = (int16_t)(dx + (int16_t)p->x);
-    return terrain_sample_height((uint16_t)x, (uint16_t)y);
+    // round 11: the original's 16-bit sums ((int16_t)p->y - dy, dx + (int16_t)p->x) wrapped onto the world
+    return terrain_sample_height(world_wrap(p->x + dx), world_wrap(p->y - dy));
 }
 
 // terrain_cell_flag_bit_103d0
 uint32_t terrain_cell_flag_bit(const Pos *p) {
-    return 1u << (g_map_flags[mc_cell_of(p->x, p->y)] & 0xf);
+    return 1u << (g_map_flags[world_cell_of(p->x, p->y)] & 0xf);
 }
 
 // terrain_type_mask_at_10480: texture id of the cell -> terrain bit (jump table at 0x103f4).
@@ -610,17 +609,17 @@ uint32_t terrain_type_mask_at(const Pos *p) {
         0x400000, 0x0, 0x0, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x20000, 0x20000, 0x40000,
         0x20000, 0x80000, 0x10000, 0x80000, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400,
     };
-    uint8_t tex = g_map_type[mc_cell_of(p->x, p->y)];
+    uint8_t tex = g_map_type[world_cell_of(p->x, p->y)];
     return tex > 0x22 ? 0x800000u : mask[tex];
 }
 
 // terrain_slope_vector_3e4b0
 void terrain_slope_vector(const Pos *p, int16_t out[2]) {
-    uint8_t cx = (uint8_t)(p->x >> 8), cy = (uint8_t)(p->y >> 8);
-    int h00 = g_map_height[mc_cell(cx, cy)];
-    int h10 = g_map_height[mc_cell((uint8_t)(cx + 1), cy)];
-    int h11 = g_map_height[mc_cell((uint8_t)(cx + 1), (uint8_t)(cy + 1))];
-    int h01 = g_map_height[mc_cell(cx, (uint8_t)(cy + 1))];
+    const int cx = world_cx(p->x), cy = world_cx(p->y);
+    int h00 = g_map_height[world_cell(cx, cy)];
+    int h10 = g_map_height[world_cell(cx + 1, cy)];
+    int h11 = g_map_height[world_cell(cx + 1, cy + 1)];
+    int h01 = g_map_height[world_cell(cx, cy + 1)];
     out[0] = (int16_t)(h00 - h10 - h11 + h01);
     out[1] = (int16_t)(h00 + h10 - h11 - h01);
 }
@@ -652,6 +651,14 @@ int math_atan2(int dx_in, int dy_in) {
     return (uint16_t)(0x800 - at(dx, dy));
 }
 
+// Round 11: math_atan2 of a world difference. In the 256-cell world exactly math_atan2 (the arguments are
+// sign-extended words); in a wider one both components are halved together until they fit a word.
+int math_atan2_w(int32_t dx, int32_t dy) {
+    if (g_world.size != 256)
+        while (dx >= 0x8000 || dx < -0x8000 || dy >= 0x8000 || dy < -0x8000) { dx /= 2; dy /= 2; }
+    return math_atan2(dx, dy);
+}
+
 // math_rotate_offset_3e420
 void math_rotate_offset(Pos *p, int yaw, int pitch, int dist) {
     int16_t d = (int16_t)dist;
@@ -661,8 +668,8 @@ void math_rotate_offset(Pos *p, int yaw, int pitch, int dist) {
         p->z = (int16_t)(p->z - ((mc_sin(pa) * (int32_t)d) >> 16));
         d = (int16_t)((mc_cos(pa) * (int32_t)d) >> 16);
     }
-    p->x = (uint16_t)((int16_t)p->x + ((mc_sin(ya) * (int32_t)d) >> 16));
-    p->y = (uint16_t)((int16_t)p->y - ((mc_cos(ya) * (int32_t)d) >> 16));
+    p->x = p->x + ((mc_sin(ya) * (int32_t)d) >> 16);         // the original's 16-bit sum; WCoord wraps
+    p->y = p->y - ((mc_cos(ya) * (int32_t)d) >> 16);
 }
 
 // pos_follow_ground_3e560
@@ -704,13 +711,13 @@ int pos_sink_or_follow_ground(Pos *p, int ground, int lo, int hi, int step) {
 
 // pos_angle_to_3e6b0
 int pos_angle_to(const Pos *from, const Pos *to) {
-    return math_atan2((int16_t)(to->x - from->x), (int16_t)(to->y - from->y));
+    return math_atan2_w(world_signed(to->x - from->x), world_signed(to->y - from->y));
 }
 
 // pos_pitch_to_3e6e0
 int pos_pitch_to(const Pos *a, const Pos *b) {
     int d = pos_dist_xy(a, b);
-    return math_atan2((int16_t)(a->z - b->z), (int16_t)(-d));
+    return math_atan2_w((int16_t)(a->z - b->z), g_world.size == 256 ? (int16_t)(-d) : -d);
 }
 
 // pos_pitch_from_dz_3e710
@@ -722,29 +729,27 @@ static inline int iabs(int v) { return v < 0 ? -v : v; }
 
 // pos_dist_manhattan_3e730 (operands sign-extended before the subtraction: no 16-bit wrap)
 int pos_dist_manhattan(const Pos *a, const Pos *b) {
-    return iabs((int16_t)a->x - (int16_t)b->x) + iabs((int16_t)a->y - (int16_t)b->y) + iabs(a->z - b->z);
+    return iabs(world_signed(a->x) - world_signed(b->x)) + iabs(world_signed(a->y) - world_signed(b->y)) + iabs(a->z - b->z);
 }
 
 // pos_dist_chebyshev_xy_3e860 (16-bit wrapped differences)
 int pos_dist_chebyshev_xy(const Pos *a, const Pos *b) {
-    int dx = iabs((int16_t)(b->x - a->x)), dy = iabs((int16_t)(b->y - a->y));
+    int dx = iabs(world_signed(b->x - a->x)), dy = iabs(world_signed(b->y - a->y));
     return dx >= dy ? dx : dy;
 }
 
-// pos_dist_sq_xyz_3e8f0
-int pos_dist_sq_xyz(const Pos *a, const Pos *b) {
-    int32_t dy = (int16_t)(b->y - a->y), dx = (int16_t)(b->x - a->x), dz = (int16_t)(b->z - a->z);
-    return (int32_t)((uint32_t)(dy * dy) + (uint32_t)(dx * dx) + (uint32_t)(dz * dz));
+// pos_dist_sq_xyz_3e8f0 (round 11: int64 beyond the 256-cell world, world.h world_dist_sq3)
+int64_t pos_dist_sq_xyz(const Pos *a, const Pos *b) {
+    return world_dist_sq3(world_signed(b->x - a->x), world_signed(b->y - a->y), (int16_t)(b->z - a->z));
 }
 // pos_dist_xyz_3e8a0
-int pos_dist_xyz(const Pos *a, const Pos *b) { return (int)mc_isqrt((uint32_t)pos_dist_sq_xyz(a, b)); }
+int pos_dist_xyz(const Pos *a, const Pos *b) { return (int)world_isqrt(pos_dist_sq_xyz(a, b)); }
 // pos_dist_sq_xy_3e970
-int pos_dist_sq_xy(const Pos *a, const Pos *b) {
-    int32_t dy = (int16_t)(b->y - a->y), dx = (int16_t)(b->x - a->x);
-    return (int32_t)((uint32_t)(dy * dy) + (uint32_t)(dx * dx));
+int64_t pos_dist_sq_xy(const Pos *a, const Pos *b) {
+    return world_dist_sq(world_signed(b->x - a->x), world_signed(b->y - a->y));
 }
 // pos_dist_xy_3e930
-int pos_dist_xy(const Pos *a, const Pos *b) { return (int)mc_isqrt((uint32_t)pos_dist_sq_xy(a, b)); }
+int pos_dist_xy(const Pos *a, const Pos *b) { return (int)world_isqrt(pos_dist_sq_xy(a, b)); }
 
 // angle_diff_3e770
 int angle_diff(int a, int b) {
@@ -801,7 +806,7 @@ Thing *thing_find_in_sight_of_class(Thing *t, int cls) {
 // Raw 32-bit views: in a saved image the port's index fields still hold the original pointers.
 uint32_t g_snapshot_things_base = 0;
 
-bool thing_relink_snapshot(GameState *s) {
+bool thing_relink_snapshot(GameStateImage *s) {
     // Thing pointers are base + 0x7463 + idx*0xa4. The free stack holds exactly the slots whose
     // class is 0, so its largest pointer belongs to the highest free slot.
     int top = s->free_top;
@@ -813,21 +818,21 @@ bool thing_relink_snapshot(GameState *s) {
         int max_idx = 0;
         for (int i = MC_THING_SLOTS - 1; i >= 1; i--) if (s->things[i].cls == 0) { max_idx = i; break; }
         if (!max_idx) return false;
-        things_base = max_ptr - (uint32_t)max_idx * sizeof(Thing);
+        things_base = max_ptr - (uint32_t)max_idx * sizeof(ThingImage);
     } else {
         // Full pool (free stack empty, e.g. level 49 from tick 2 on - round 5 reference): player 0's
         // Thing.player points at its P block, GameState + 0x340b + 0x44f.
         uint32_t pp = s->things[s->players[0].thing % MC_THING_SLOTS].player;
         if (!pp) return false;
-        things_base = pp - (uint32_t)(offsetof(GameState, players) + offsetof(PlayerRec, p)) +
-                      (uint32_t)offsetof(GameState, things);
+        things_base = pp - (uint32_t)(offsetof(GameStateImage, players) + offsetof(PlayerRec, p)) +
+                      (uint32_t)offsetof(GameStateImage, things);
     }
     g_snapshot_things_base = things_base;
-    uint32_t state_base = things_base - (uint32_t)offsetof(GameState, things);
+    uint32_t state_base = things_base - (uint32_t)offsetof(GameStateImage, things);
     auto to_index = [&](uint32_t ptr) -> int32_t {
         if (ptr < things_base) return 0;
         uint32_t d = ptr - things_base;
-        return (d % sizeof(Thing) == 0 && d / sizeof(Thing) < MC_THING_SLOTS) ? (int32_t)(d / sizeof(Thing)) : 0;
+        return (d % sizeof(ThingImage) == 0 && d / sizeof(ThingImage) < MC_THING_SLOTS) ? (int32_t)(d / sizeof(ThingImage)) : 0;
     };
     for (int i = 0; i <= top; i++) {
         int32_t idx = to_index((uint32_t)s->free_list[i]);
@@ -840,10 +845,10 @@ bool thing_relink_snapshot(GameState *s) {
     // Descriptor pointers: demo_relink_state_pointers_3dc10 rebases them so that player 0's thing
     // has g_move_desc[7] (0x96af0); do the same and convert to an index.
     uint32_t anchor = s->things[s->players[0].thing % MC_THING_SLOTS].desc;
-    uint32_t players_lo = state_base + (uint32_t)offsetof(GameState, players);
-    uint32_t players_hi = state_base + (uint32_t)offsetof(GameState, commands);
+    uint32_t players_lo = state_base + (uint32_t)offsetof(GameStateImage, players);
+    uint32_t players_hi = state_base + (uint32_t)offsetof(GameStateImage, commands);
     for (int i = 0; i < MC_THING_SLOTS; i++) {
-        Thing &t = s->things[i];
+        ThingImage &t = s->things[i];
         if (i != 0 && t.cls == 0) { t.next = 0; t.desc = 0; t.player = 0; continue; }
         t.next = (uint32_t)to_index(t.next);
         uint32_t d = t.desc - anchor + 7u * sizeof(MoveDesc);
@@ -851,4 +856,18 @@ bool thing_relink_snapshot(GameState *s) {
         t.player = (t.player >= players_lo && t.player < players_hi) ? t.player - state_base : 0;
     }
     return true;
+}
+
+bool thing_load_snapshot_image(const void *bytes, GameState *out, bool keep_head_opts) {
+    static GameStateImage img;
+    std::memcpy(&img, bytes, sizeof img);
+    if (keep_head_opts) {
+        uint8_t *d = reinterpret_cast<uint8_t *>(&img);
+        const uint8_t *s = reinterpret_cast<const uint8_t *>(out);
+        std::memcpy(d, s, 4);
+        std::memcpy(d + 0x2195, s + 0x2195, 0x24);
+    }
+    const bool ok = thing_relink_snapshot(&img);
+    state_from_image(img, out);
+    return ok;
 }

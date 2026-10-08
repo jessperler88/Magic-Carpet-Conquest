@@ -125,7 +125,8 @@ static int replay_to_snapshot(const std::vector<Thing> &snap, bool recording_bui
             if (a->rng != b->rng) differ_rng++;
             if (verbose && differ <= 6)
                 std::printf("  thing %d type %d: port state %d aux %d target %d pos %04x,%04x | snapshot state %d aux %d target %d pos %04x,%04x\n",
-                            i, a->type, a->state, a->aux, a->target, a->x, a->y, b->state, b->aux, b->target, b->x, b->y);
+                            i, a->type, a->state, a->aux, a->target, (unsigned)a->x, (unsigned)a->y, b->state, b->aux, b->target,
+                            (unsigned)b->x, (unsigned)b->y);
         }
     }
     // start creatures that are gone in both worlds (townies that walked into a castle, converted villagers)

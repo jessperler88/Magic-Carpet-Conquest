@@ -109,7 +109,12 @@ static bool ignore_player_byte(const uint8_t *ref_rec, int k) {
     return std::memchr(ref_rec + name, 0, (size_t)(k - name)) != nullptr;
 }
 
-static bool load_ref(const std::string &dir, int tick, GameState *out) {
+// Round 11: both sides are compared as the original's byte image (mc_image.h): the reference as dumped
+// (relinked to index form), the port's state converted with state_to_image.
+static GameStateImage s_port_img;
+static const GameStateImage &port_image() { state_to_image(*g_state, &s_port_img); return s_port_img; }
+
+static bool load_ref(const std::string &dir, int tick, GameStateImage *out) {
     char name[64];
     std::snprintf(name, sizeof name, "tick%05d.gam", tick);
     std::string path = dir + "/" + name;
@@ -117,9 +122,9 @@ static bool load_ref(const std::string &dir, int tick, GameState *out) {
     if (!mc_read_file(path.c_str(), &b)) return false;
     // Hidden Worlds (tools/reference/run_level_hw.py): the 1995 executables dump 6 more bytes after
     // spells_present (0x38d09); the common 0x38d03 bytes are compared.
-    bool ok = b.len == sizeof(GameState) || b.len == kState1995Size;
+    bool ok = b.len == MC_STATE_IMAGE_SIZE || b.len == kState1995Size;
     if (ok) {
-        std::memcpy(out, b.data, sizeof(GameState));
+        std::memcpy(out, b.data, MC_STATE_IMAGE_SIZE);
         if (b.len == kState1995Size) g_ref_1995 = true;
         ok = thing_relink_snapshot(out);
     }
@@ -145,19 +150,20 @@ static int index_int(const std::string &dir, const char *key, int def) {
 
 // Brief comparison of a reference state against the port's (list links ignored): differing slots, the
 // first one, player records, RNG. Used by the level-generation check; MC_REF_GEN_TRACE lists every field.
-static int compare_states_brief(const GameState &ref, const char *what) {
+static int compare_states_brief(const GameStateImage &ref, const char *what) {
     int slots = 0, first_slot = 0;
     const Field *first_field = nullptr;
     long rv = 0, pv = 0;
     int nref = 0, nport = 0;
     const bool trace = std::getenv("MC_REF_GEN_TRACE") != nullptr;
+    const GameStateImage &port = port_image();
     for (int i = 1; i < MC_THING_SLOTS; i++) {
         const uint8_t *pr = reinterpret_cast<const uint8_t *>(&ref.things[i]);
-        const uint8_t *po = reinterpret_cast<const uint8_t *>(&g_state->things[i]);
+        const uint8_t *po = reinterpret_cast<const uint8_t *>(&port.things[i]);
         if (ref.things[i].cls) nref++;
-        if (g_state->things[i].cls) nport++;
+        if (port.things[i].cls) nport++;
         int first = -1;
-        for (int b = 0; b < (int)sizeof(Thing); b++) if (pr[b] != po[b] && !is_link(b)) { first = b; break; }
+        for (int b = 0; b < (int)sizeof(ThingImage); b++) if (pr[b] != po[b] && !is_link(b)) { first = b; break; }
         if (first < 0) continue;
         if (!slots++) {
             first_slot = i; first_field = field_at(first);
@@ -267,7 +273,7 @@ int main(int argc, char **argv) {
             // References of the 1995 executables (run_level_hw.py: index.json state_size 0x38d09) run only
             // in a directory that holds nothing else (extracted/reference/hw_gen, cd95_gen): next to the
             // 1996 references (extracted/reference) they are not part of that gate.
-            if (index_int(ref_dir + sub, "state_size", (int)sizeof(GameState)) == (int)kState1995Size)
+            if (index_int(ref_dir + sub, "state_size", (int)MC_STATE_IMAGE_SIZE) == (int)kState1995Size)
                 subs1995.push_back(sub);
             else
                 subs.push_back(sub);
@@ -315,7 +321,7 @@ int main(int argc, char **argv) {
     const int first_tick = level >= 0 ? index_int(ref_dir, "first_tick", 2) : 413;
     // gen_only (run_level.py --gen-only): only the level-generation check (tick00001.gam + the snapshot pair).
     const bool gen_only = level >= 0 && index_int(ref_dir, "gen_only", 0) != 0;
-    static GameState ref;   // 0x38d03 bytes
+    static GameStateImage ref;   // 0x38d03 bytes
     if (!load_ref(ref_dir, gen_only ? 1 : first_tick, &ref)) {
         // Not every machine has the dumps (they come from DOSBox); ctest passes with a notice.
         std::printf("SKIP: reference %s/tick%05d.gam missing or unusable; run tools/reference/run_reference.py "
@@ -329,7 +335,7 @@ int main(int argc, char **argv) {
 
     // A projectile that hit nothing stores (NULL - &things[0]) / 0xa4 (signed, low 16 bits) in its
     // impact effect's target: depends on where the reference run's pool lay (first seen at tick 1196).
-    g_projectile_null_hit_index = (uint16_t)((int32_t)(0u - g_snapshot_things_base) / (int32_t)sizeof(Thing));
+    g_projectile_null_hit_index = (uint16_t)((int32_t)(0u - g_snapshot_things_base) / (int32_t)sizeof(ThingImage));
     std::printf("reference run: things[0] at 0x%08x, null-hit index 0x%04x\n", g_snapshot_things_base,
                 (unsigned)g_projectile_null_hit_index);
     // The reference runs start with `-roll` (patched: flags |= 0x124 to play, 0x100 to record): 0x100 (front end
@@ -361,11 +367,11 @@ int main(int argc, char **argv) {
                 fs::copy_file(fs::path(ref_dir) / "movie" / n, tmp / "movie" / n, fs::copy_options::overwrite_existing, ec);
             }
             if (FILE *fp = std::fopen((tmp.string() + gname).c_str(), "wb")) {
-                std::fwrite(g.data, 1, sizeof(GameState), fp);
+                std::fwrite(g.data, 1, MC_STATE_IMAGE_SIZE, fp);
                 std::fclose(fp);
             }
             int extra = 0;
-            for (size_t i = sizeof(GameState); i < g.len; i++) extra |= g.data[i];
+            for (size_t i = MC_STATE_IMAGE_SIZE; i < g.len; i++) extra |= g.data[i];
             std::printf("1995 snapshot: playing from %s (6 extra bytes %s)\n", tmp.string().c_str(),
                         extra ? "NON-ZERO" : "zero");
             movie_dir = tmp.string();
@@ -493,11 +499,12 @@ int main(int argc, char **argv) {
         if ((size_t)steps < step_is_last.size() && !step_is_last[(size_t)steps]) continue;
         if (!load_ref(ref_dir, tick, &ref)) continue;
         compared++;
+        const GameStateImage &port = port_image();
         int live = 0, same = 0, links_only = 0;
         int cdiff[14] = {}, clive[14] = {};
         int nref = 0, nport = 0;
         for (int i = 1; i < MC_THING_SLOTS; i++) {
-            const Thing &r = ref.things[i], &o = g_state->things[i];
+            const ThingImage &r = ref.things[i], &o = port.things[i];
             if (r.cls) nref++;
             if (o.cls) nport++;
             if (r.cls == 0 && o.cls == 0) continue;
@@ -507,7 +514,7 @@ int main(int argc, char **argv) {
             const uint8_t *pr = reinterpret_cast<const uint8_t *>(&r), *po = reinterpret_cast<const uint8_t *>(&o);
             int first = -1, nb = 0;
             bool link = false;
-            for (int b = 0; b < (int)sizeof(Thing); b++) {
+            for (int b = 0; b < (int)sizeof(ThingImage); b++) {
                 if (pr[b] == po[b]) continue;
                 if (is_link(b)) { link = true; continue; }
                 if (first < 0) first = b;
@@ -539,7 +546,7 @@ int main(int argc, char **argv) {
                     int i = std::atoi(p);
                     if (i > 0 && i < MC_THING_SLOTS) {
                         const uint8_t *pr = reinterpret_cast<const uint8_t *>(&ref.things[i]);
-                        const uint8_t *po = reinterpret_cast<const uint8_t *>(&g_state->things[i]);
+                        const uint8_t *po = reinterpret_cast<const uint8_t *>(&port.things[i]);
                         std::printf("  trace %d slot %d (ref %d/%d/%d port %d/%d/%d):", tick, i, pr[0x40], pr[0x41], pr[0x46],
                                     po[0x40], po[0x41], po[0x46]);
                         for (const Field &f : kFields) {

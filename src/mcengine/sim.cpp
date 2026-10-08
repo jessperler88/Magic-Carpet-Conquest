@@ -14,6 +14,7 @@
 #include "demo.h"
 #include "mode.h"
 #include "world_set.h"
+#include "world.h"
 #include "mcfile.h"
 #include "rnc.h"
 #include <cstdio>
@@ -82,11 +83,12 @@ void level_reset_state() {
     g_state->creature_count = 0;
     std::memset(g_state->spells_present, 0, sizeof g_state->spells_present);
     std::memset(g_state->start_pos, 0, sizeof g_state->start_pos);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
-    std::memset(g_map_type, 0, sizeof g_map_type);
-    std::memset(g_map_height, 0, sizeof g_map_height);
-    std::memset(g_map_light, 0, sizeof g_map_light);
-    std::memset(g_map_flags, 0, sizeof g_map_flags);
+    std::memset(&g_world_hi, 0, sizeof g_world_hi);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
+    std::memset(g_map_type, 0, g_world.cells);
+    std::memset(g_map_height, 0, g_world.cells);
+    std::memset(g_map_light, 0, g_world.cells);
+    std::memset(g_map_flags, 0, g_world.cells);
     std::memset(g_work_buf, 0, 64000);
 }
 
@@ -162,9 +164,8 @@ bool sim_load_snapshot(const char *gam_rel, const char *map_rel) {
     if (!mc_read_file(path, &gam)) return false;
     mc_path_join(path, sizeof path, s_game_dir.c_str(), map_rel);
     if (!mc_read_file(path, &map)) { mc_blob_free(&gam); return false; }
-    bool ok = gam.len == sizeof(GameState) && map.len >= 0x60000;
+    bool ok = gam.len == MC_STATE_IMAGE_SIZE && map.len >= 0x60000;
     if (ok) {
-        std::memcpy(g_state, gam.data, sizeof(GameState));
         std::memcpy(g_map_type, map.data, 0x10000);
         std::memcpy(g_map_height, map.data + 0x10000, 0x10000);
         std::memcpy(g_map_light, map.data + 0x20000, 0x10000);
@@ -174,7 +175,7 @@ bool sim_load_snapshot(const char *gam_rel, const char *map_rel) {
         // run-time retexture functions need.
         if (map.len >= 0x60000 + sizeof g_corner_tex_table)
             std::memcpy(g_corner_tex_table, map.data + 0x60000, sizeof g_corner_tex_table);
-        ok = thing_relink_snapshot(g_state);
+        ok = thing_load_snapshot_image(gam.data, g_state);
         thing_pool_ext_reset();     // a 1000-slot image: the wanted pool size, empty extension (thing.h)
     }
     mc_blob_free(&gam);

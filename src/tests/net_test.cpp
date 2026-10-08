@@ -569,7 +569,7 @@ static int run_player(TcpTransport *tr, int players, int ticks, int leave_tick, 
         const PlayerRec &r = g_state->players[p];
         const Thing *pt = thing_at(r.thing % MC_THING_SLOTS);
         std::snprintf(line, sizeof line, "    as seen by %d: player %d active %d status %d at %04x,%04x,%d health %d mana %d\n", me, p,
-                      r.active, r.status, pt->x, pt->y, (int)pt->z, (int)pt->health, (int)pt->mana);
+                      r.active, r.status, (unsigned)pt->x, (unsigned)pt->y, (int)pt->z, (int)pt->health, (int)pt->mana);
         msg += line;
     }
     std::fwrite(msg.data(), 1, msg.size(), stdout);

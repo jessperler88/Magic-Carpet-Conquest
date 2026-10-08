@@ -59,7 +59,7 @@ static void test_pool() {
     Thing *r = thing_alloc();
     CHECK(r == thing_at(500) && r->cls == 0 && g_state->active_top == -1);
     std::memset(g_state->things, 0, sizeof g_state->things);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
     thing_pool_reset();
 }
 
@@ -120,7 +120,7 @@ static void test_dispatch() {
     thing_update_all();
     CHECK(cr->cls == 0);
     std::memset(g_state->things, 0, sizeof g_state->things);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
     thing_pool_reset();
 }
 
@@ -131,17 +131,16 @@ static bool test_snapshot(const char *game_dir) {
     if (!mc_read_file(path, &gam)) { std::printf("snapshot: %s missing, skipped\n", path); return true; }
     mc_path_join(path, sizeof path, game_dir, "movie/map00000.dat");
     if (!mc_read_file(path, &map)) { mc_blob_free(&gam); std::printf("snapshot: %s missing, skipped\n", path); return true; }
-    CHECK(gam.len == sizeof(GameState));
+    CHECK(gam.len == MC_STATE_IMAGE_SIZE);
     CHECK(map.len >= 0x60000);
-    if (gam.len != sizeof(GameState) || map.len < 0x60000) return false;
-    std::memcpy(g_state, gam.data, sizeof(GameState));
+    if (gam.len != MC_STATE_IMAGE_SIZE || map.len < 0x60000) return false;
     std::memcpy(g_map_type, map.data, 0x10000);
     std::memcpy(g_map_height, map.data + 0x10000, 0x10000);
     std::memcpy(g_map_light, map.data + 0x20000, 0x10000);
     std::memcpy(g_map_flags, map.data + 0x30000, 0x10000);
     std::memcpy(g_cell_things, map.data + 0x40000, 0x20000);
+    CHECK(thing_load_snapshot_image(gam.data, g_state));
     mc_blob_free(&gam); mc_blob_free(&map);
-    CHECK(thing_relink_snapshot(g_state));
 
     int live = 0, linked = 0, by_class[16] = {};
     for (int i = 1; i < MC_THING_SLOTS; i++) {

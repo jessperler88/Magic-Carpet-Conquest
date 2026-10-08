@@ -73,11 +73,11 @@ static void level_reset() {
     g_state->creature_count = 0;
     std::memset(g_state->spells_present, 0, sizeof g_state->spells_present);
     std::memset(g_state->start_pos, 0, sizeof g_state->start_pos);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
-    std::memset(g_map_type, 0, sizeof g_map_type);
-    std::memset(g_map_height, 0, sizeof g_map_height);
-    std::memset(g_map_light, 0, sizeof g_map_light);
-    std::memset(g_map_flags, 0, sizeof g_map_flags);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
+    std::memset(g_map_type, 0, g_world.cells);
+    std::memset(g_map_height, 0, g_world.cells);
+    std::memset(g_map_light, 0, g_world.cells);
+    std::memset(g_map_flags, 0, g_world.cells);
 }
 
 static bool level_load(int index) {
@@ -103,11 +103,11 @@ static bool snapshot_load(const char *game_dir) {
     if (!mc_read_file(path, &gam)) { std::printf("snapshot: %s missing\n", path); return false; }
     mc_path_join(path, sizeof path, game_dir, "movie/map00000.dat");
     if (!mc_read_file(path, &s_snap_maps)) { std::printf("snapshot: %s missing\n", path); mc_blob_free(&gam); return false; }
-    if (gam.len != sizeof(GameState) || s_snap_maps.len < 0x60000) { mc_blob_free(&gam); return false; }
-    s_snap = static_cast<GameState *>(std::malloc(sizeof(GameState)));
-    std::memcpy(s_snap, gam.data, sizeof(GameState));
+    if (gam.len != MC_STATE_IMAGE_SIZE || s_snap_maps.len < 0x60000) { mc_blob_free(&gam); return false; }
+    s_snap = static_cast<GameState *>(std::calloc(1, sizeof(GameState)));
+    const bool ok = thing_load_snapshot_image(gam.data, s_snap);
     mc_blob_free(&gam);
-    return thing_relink_snapshot(s_snap);
+    return ok;
 }
 
 // ---- spawning ------------------------------------------------------------------------------------
@@ -225,7 +225,8 @@ static void test_each_constructor() {
             }
         }
     }
-    for (int p = 0; p < 8; p++) CHECK(!std::memcmp(g_state->start_pos[p], &pos, 6));
+    const PosImage pos_image{(uint16_t)(int32_t)pos.x, (uint16_t)(int32_t)pos.y, pos.z};
+    for (int p = 0; p < 8; p++) CHECK(!std::memcmp(g_state->start_pos[p], &pos_image, 6));
     int missing = thing_dispatch_report(nullptr);
     CHECK(missing == 0);
     check_pool_consistency("each constructor");
@@ -604,12 +605,12 @@ static void pass_aligned(int first_delta) {
     bool starts_xy = true;
     int starts_z = 0;
     for (int p = 0; p < 8; p++) {
-        Pos a, b, c;
+        PosImage a, b, c;
         std::memcpy(&a, g_state->start_pos[p], 6); std::memcpy(&b, s_snap->start_pos[p], 6); std::memcpy(&c, s_plain_start_pos[p], 6);
         starts_xy = starts_xy && a.x == b.x && a.y == b.y && c.x == b.x && c.y == b.y;
         starts_z += c.z == b.z;
         if (b.x || b.y) std::printf("      player %d: snapshot (0x%04x, 0x%04x, %d)  ours (0x%04x, 0x%04x), z %d on the generated terrain, %d on the snapshot terrain\n",
-                                    p, b.x, b.y, b.z, a.x, a.y, c.z, a.z);
+                                    p, (unsigned)b.x, (unsigned)b.y, b.z, (unsigned)a.x, (unsigned)a.y, c.z, a.z);
     }
     std::printf("      x / y of all 8 %s; z on the generated terrain identical for %d of 8\n", starts_xy ? "identical" : "DIFFER", starts_z);
     CHECK(starts_xy && starts_z == 8);
@@ -635,7 +636,7 @@ static void pass_runtime_kinds(const std::set<int> &paired_slots) {
         if (!r.cls || paired_slots.count(i)) continue;
         if (r.cls == 10 && agent_a_effect(r.type)) continue;
         thing_pool_reset();
-        std::memset(g_cell_things, 0, sizeof g_cell_things);
+        std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
         std::memset(&g_state->padc, 0, 0x28 - 0xc);   // +0xc..+0x27: serials, volcano_thing, volcano_smoke
         Thing *t = thing_create(thing_pos(&r), r.cls, r.type);
         if (!t) { std::printf("FAIL pass C: class %d type 0x%02x not created\n", r.cls, r.type); g_fail++; continue; }

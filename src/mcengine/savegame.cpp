@@ -253,7 +253,9 @@ bool savestate_save_file(const char *path, const char *name) {
     s_state_error.clear();
     if (!g_state || !g_cfg) { s_state_error = "no game state"; return false; }
     Writer w;
-    {   const size_t c = w.begin("GAME"); w.raw(g_state, sizeof(GameState)); w.end(c); }
+    {   static GameStateImage img;                          // round 11: the original's byte layout (mc_image.h)
+        state_to_image(*g_state, &img);
+        const size_t c = w.begin("GAME"); w.raw(&img, sizeof img); w.end(c); }
     {   const size_t c = w.begin("CONF"); w.raw(g_cfg, sizeof(Config)); w.end(c); }
     {   const size_t c = w.begin("MAPS");
         w.raw(g_map_type, 0x10000); w.raw(g_map_height, 0x10000); w.raw(g_map_light, 0x10000);
@@ -285,7 +287,11 @@ bool savestate_save_file(const char *path, const char *name) {
         const size_t c = w.begin("POOL");
         const size_t e = (size_t)(slots - MC_THING_SLOTS);
         w.u32((uint32_t)slots);
-        w.raw(thing_at(MC_THING_SLOTS), e * sizeof(Thing));
+        for (size_t i = 0; i < e; i++) {
+            ThingImage ti;
+            thing_to_image(*thing_at((unsigned)(MC_THING_SLOTS + i)), &ti);
+            w.raw(&ti, sizeof ti);
+        }
         w.raw(thing_pool_ext_free_stack(), e * 4);
         w.raw(thing_pool_ext_active_stack(), e * 4);
         w.end(c);
@@ -395,7 +401,7 @@ bool savestate_load_file(const char *path) {
         const size_t len = get32(c + 4);
         if (off + 8 + len > data.size()) { s_state_error = "truncated chunk"; return false; }
         const uint8_t *body = c + 8;
-        if (!std::memcmp(c, "GAME", 4) && len == sizeof(GameState)) game = body;
+        if (!std::memcmp(c, "GAME", 4) && len == MC_STATE_IMAGE_SIZE) game = body;
         else if (!std::memcmp(c, "CONF", 4) && len == sizeof(Config)) conf = body;
         else if (!std::memcmp(c, "MAPS", 4) && len == MAPS_BYTES) maps = body;
         else if (!std::memcmp(c, "GLOB", 4)) { glob = body; glob_n = len; }
@@ -409,7 +415,7 @@ bool savestate_load_file(const char *path) {
     if (!globals_valid(glob, glob_n)) { s_state_error = "globals chunk missing or of another version"; return false; }
     if (mode && mode_n != mode_serialised_size()) { s_state_error = "mode chunk of another version"; return false; }
     const size_t e = h.thing_slots - (uint32_t)MC_THING_SLOTS;
-    if (e && (!pool || pool_n != 4 + e * (sizeof(Thing) + 8) || get32(pool) != h.thing_slots)) {
+    if (e && (!pool || pool_n != 4 + e * (sizeof(ThingImage) + 8) || get32(pool) != h.thing_slots)) {
         s_state_error = "pool chunk missing or of the wrong size";
         return false;
     }
@@ -423,13 +429,15 @@ bool savestate_load_file(const char *path) {
 
     // GameState in the port's form, except the first dword and the option bytes the user set
     // (+0x2195..+0x21b8), which are kept the way demo_load_state_3c200 keeps them.
-    uint8_t *st = reinterpret_cast<uint8_t *>(g_state);
-    uint8_t head[4], opts[0x24];
-    std::memcpy(head, st, 4);
-    std::memcpy(opts, st + 0x2195, sizeof opts);
-    std::memcpy(st, game, sizeof(GameState));
-    std::memcpy(st + 0x2195, opts, sizeof opts);
-    std::memcpy(st, head, 4);
+    {
+        static GameStateImage img;                              // round 11: the chunk is the original's layout
+        std::memcpy(&img, game, sizeof img);
+        uint8_t *d = reinterpret_cast<uint8_t *>(&img);
+        const uint8_t *st = reinterpret_cast<const uint8_t *>(g_state);
+        std::memcpy(d, st, 4);
+        std::memcpy(d + 0x2195, st + 0x2195, 0x24);
+        state_from_image(img, g_state);
+    }
 
     // Config: everything but the fields of the platform / the session.
     {
@@ -474,7 +482,11 @@ bool savestate_load_file(const char *path) {
         thing_pool_force_slots(0);
         if (e) {
             const uint8_t *p = pool + 4;
-            std::memcpy(thing_at(MC_THING_SLOTS), p, e * sizeof(Thing)); p += e * sizeof(Thing);
+            for (size_t i = 0; i < e; i++, p += sizeof(ThingImage)) {
+                ThingImage ti;
+                std::memcpy(&ti, p, sizeof ti);
+                thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)));
+            }
             std::memcpy(thing_pool_ext_free_stack(), p, e * 4); p += e * 4;
             std::memcpy(thing_pool_ext_active_stack(), p, e * 4);
             g_state->free_top = free_top;                       // ext_reset clamps a top below -1

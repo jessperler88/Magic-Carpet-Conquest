@@ -15,6 +15,8 @@
 #include <cstdio>
 #include "mc_types.h"
 #include "mc_globals.h"
+#include "mc_image.h"
+#include "world.h"
 
 // ---- handler binding ---------------------------------------------------------------------------
 using ThingUpdateFn = void   (*)(Thing *t);          // Table A: stack arg = thing
@@ -195,6 +197,7 @@ void     terrain_slope_vector(const Pos *p, int16_t out[2]);      // terrain_slo
 
 // ---- position / angle helpers (0x3e420..0x3e9a0, 0x4cc33) --------------------------------------
 int  math_atan2(int dx, int dy);                                  // math_atan2_4cc33: 0 = -y, 0x200 = +x (args are 16-bit)
+int  math_atan2_w(int32_t dx, int32_t dy);                        // round 11: of a world difference (world.h)
 void math_rotate_offset(Pos *p, int yaw, int pitch, int dist);    // math_rotate_offset_3e420
 int  pos_follow_ground(Pos *p, int ground, int lo, int hi, int step);          // pos_follow_ground_3e560
 int  pos_sink_or_follow_ground(Pos *p, int ground, int lo, int hi, int step);  // pos_sink_or_follow_ground_3e5f0
@@ -204,9 +207,9 @@ int  pos_pitch_from_dz(int z0, int z1, int dist);                 // pos_pitch_f
 int  pos_dist_manhattan(const Pos *a, const Pos *b);              // pos_dist_manhattan_3e730
 int  pos_dist_chebyshev_xy(const Pos *a, const Pos *b);           // pos_dist_chebyshev_xy_3e860
 int  pos_dist_xyz(const Pos *a, const Pos *b);                    // pos_dist_xyz_3e8a0
-int  pos_dist_sq_xyz(const Pos *a, const Pos *b);                 // pos_dist_sq_xyz_3e8f0
+int64_t pos_dist_sq_xyz(const Pos *a, const Pos *b);              // pos_dist_sq_xyz_3e8f0 (int32 wrap at 256 cells)
 int  pos_dist_xy(const Pos *a, const Pos *b);                     // pos_dist_xy_3e930
-int  pos_dist_sq_xy(const Pos *a, const Pos *b);                  // pos_dist_sq_xy_3e970
+int64_t pos_dist_sq_xy(const Pos *a, const Pos *b);               // pos_dist_sq_xy_3e970 (int32 wrap at 256 cells)
 int  angle_diff(int a, int b);                                    // angle_diff_3e770: 0..0x400
 int  angle_turn_dir(int from, int to);                            // angle_turn_dir_3e7a0: -1, 0, +1
 int  angle_turn_step(int cur, int target, int unused, int max_step);   // angle_turn_step_3e800
@@ -220,7 +223,10 @@ Thing *thing_find_in_sight_of_class(Thing *t, int cls);           // thing_find_
 // Convert a raw GameState image saved by the original (movie/gam*.dat, save games) in place: every
 // 32-bit pointer field becomes the port's index / offset form (see mc_types.h). `image` must be
 // sizeof(GameState) bytes. Returns false when the block base cannot be derived from the free list.
-bool thing_relink_snapshot(GameState *image);
+bool thing_relink_snapshot(GameStateImage *image);
+// Round 11: `bytes` (MC_STATE_IMAGE_SIZE, an original image) relinked and converted into `out` (mc_image.h);
+// `keep_head_opts` keeps out's first dword and option bytes 0x2195..0x21b8 as demo_load_state_3c200 does.
+bool thing_load_snapshot_image(const void *bytes, GameState *out, bool keep_head_opts = false);
 // Address of things[0] in the run that wrote the last image thing_relink_snapshot converted (0 before
 // the first). The original's (ptr - &things[0]) / 0xa4 on a null pointer depends on it
 // (g_projectile_null_hit_index).

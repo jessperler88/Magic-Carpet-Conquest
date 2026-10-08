@@ -62,14 +62,46 @@ static_assert(offsetof(LevelData, things) == 0x442);
 static_assert(offsetof(LevelData, player_block) == 0x90d0);
 static_assert(offsetof(LevelData, win_percent) == 0x9790);
 
+// ---- World coordinates (Phase 4 round 11, docs/analysis/phase4_code_world.md section 7) -----------------
+// The original keeps a position as u16 world units (cell = high byte), so its world is exactly 256 cells
+// wide and every position store wraps at 65536. The port stores x / y as int32 (`WCoord`) so a world can be
+// N cells wide (N a power of two, 256 .. 4096): every store wraps into 0 .. N*256-1 through
+// g_world_unit_mask (world.h sets it at level start). With the original's 256 cells the mask is 0xffff and a
+// WCoord behaves exactly like the original's u16 field: same value after every store, same promotion to int
+// on every read. The original byte layout is kept as the "image" types below (PosImage, ThingImage,
+// GameStateImage) for movies, save states, the per-tick references and the network checksum
+// (mc_image.h converts).
+inline uint32_t g_world_unit_mask = 0xffffu;   // world units - 1 (N * 256 - 1); world.h owns it
+
+struct WCoord {
+    int32_t v;
+    WCoord() = default;
+    WCoord(int32_t a) : v((int32_t)((uint32_t)a & g_world_unit_mask)) {}
+    operator int32_t() const { return v; }
+    WCoord &operator=(int32_t a) { v = (int32_t)((uint32_t)a & g_world_unit_mask); return *this; }
+    WCoord &operator+=(int32_t a) { return *this = v + a; }
+    WCoord &operator-=(int32_t a) { return *this = v - a; }
+    WCoord &operator&=(int32_t a) { return *this = v & a; }
+    WCoord &operator|=(int32_t a) { return *this = v | a; }
+    WCoord &operator++() { return *this = v + 1; }
+    WCoord &operator--() { return *this = v - 1; }
+    int32_t operator++(int) { const int32_t o = v; *this = v + 1; return o; }
+    int32_t operator--(int) { const int32_t o = v; *this = v - 1; return o; }
+};
+static_assert(sizeof(WCoord) == 4);
+
 // World position as the original passes it around ({u16 x, u16 y, i16 z}; cell = high byte).
 // Thing+0x48 has this layout, so `thing_pos(t)` can be handed to anything that takes a Pos*.
-struct Pos {
-    uint16_t x;
-    uint16_t y;
-    int16_t  z;
+// `Pos` is the port's in-memory form (int32 x / y), `PosImage` the original's 6 bytes.
+template <class C> struct PosT {
+    C       x;
+    C       y;
+    int16_t z;
 };
-static_assert(sizeof(Pos) == 6);
+using Pos      = PosT<WCoord>;
+using PosImage = PosT<uint16_t>;
+static_assert(sizeof(Pos) == 10);
+static_assert(sizeof(PosImage) == 6);
 
 // Pending damage by type, 6 slots at Thing+0x5a.
 struct DamageSlot {
@@ -112,8 +144,10 @@ struct SpriteDesc {
 };
 static_assert(sizeof(SpriteDesc) == 0xe);
 
-// The entity record (0xa4 bytes). 1000 slots at GameState+0x7463; slot 0 is the scratch sentinel.
-struct Thing {
+// The entity record (0xa4 bytes in the original). 1000 slots at GameState+0x7463; slot 0 is the scratch
+// sentinel. `Thing` is the port's in-memory form (int32 x / y / home: 0xac bytes), `ThingImage` the
+// original's 0xa4-byte record; the offsets in the comments are the original's.
+template <class C> struct ThingT {
     uint32_t   next;            // 0x00 idx: next in per-tick class list (heads in Config)
     uint32_t   rng;             // 0x04 per-thing LCG seed x*0x24a1+0x24df
     int32_t    max_health;      // 0x08
@@ -152,8 +186,8 @@ struct Thing {
     uint8_t    impact_type;     // 0x45
     uint8_t    state;           // 0x46 Table A index
     uint8_t    castle_size;     // 0x47
-    uint16_t   x;               // 0x48 world units, cell = x>>8
-    uint16_t   y;               // 0x4a
+    C          x;               // 0x48 world units, cell = x>>8
+    C          y;               // 0x4a
     int16_t    z;               // 0x4c
     int16_t    ext_z0;          // 0x4e bbox half extents
     int16_t    ext_x;           // 0x50
@@ -172,17 +206,21 @@ struct Thing {
     uint16_t   mana_owner;      // 0x90
     uint16_t   target;          // 0x92
     uint16_t   unk94;           // 0x94
-    Pos        home;            // 0x96 home / origin / destination position (castle, projectile launch, teleport target)
+    PosT<C>    home;            // 0x96 home / origin / destination position (castle, projectile launch, teleport target)
     uint32_t   desc;            // 0x9c idx: MoveDesc index (original: pointer, DAT_00096a10 default)
     uint32_t   player;          // 0xa0 idx: owner player sub-block offset into GameState (PlayerRec+0x44f), 0 = dummy
 };
-static_assert(sizeof(Thing) == 0xa4);
-static_assert(offsetof(Thing, state) == 0x46);
-static_assert(offsetof(Thing, x) == 0x48);
-static_assert(offsetof(Thing, damage_slots) == 0x5a);
-static_assert(offsetof(Thing, speed_cur) == 0x7e);
-static_assert(offsetof(Thing, home) == 0x96);
-static_assert(offsetof(Thing, desc) == 0x9c);
+using Thing      = ThingT<WCoord>;
+using ThingImage = ThingT<uint16_t>;
+static_assert(sizeof(ThingImage) == 0xa4);
+static_assert(offsetof(ThingImage, state) == 0x46);
+static_assert(offsetof(ThingImage, x) == 0x48);
+static_assert(offsetof(ThingImage, damage_slots) == 0x5a);
+static_assert(offsetof(ThingImage, speed_cur) == 0x7e);
+static_assert(offsetof(ThingImage, home) == 0x96);
+static_assert(offsetof(ThingImage, desc) == 0x9c);
+static_assert(sizeof(Thing) == 0xac);
+static_assert(offsetof(Thing, x) == 0x48 && offsetof(Thing, z) == 0x50 && offsetof(Thing, home) == 0x9a);
 
 // One HUD message slot (0x44 bytes). PlayerRec holds one per *sending* player: the text player q
 // produced is shown from players[local].messages[q].
@@ -377,8 +415,10 @@ static_assert(offsetof(PlayerRec, input_mode) == 0x44a);
 static_assert(offsetof(PlayerRec, p) == 0x44f);
 static_assert(offsetof(PlayerRec, blk) == 0x44f);
 
-// The game-state block (0x38d03 bytes), pointed to by g_state.
-struct GameState {
+// The game-state block (0x38d03 bytes in the original), pointed to by g_state. `GameState` is the port's
+// in-memory form (Things as `Thing`, so everything from `things` on is 8 bytes per slot further than the
+// offsets in the comments), `GameStateImage` the original's byte image (mc_image.h converts).
+template <class T> struct GameStateT {
     uint8_t   pad0[4];               // 0x0000
     uint32_t  rng;                   // 0x0004
     int16_t   local_player;          // 0x0008
@@ -416,28 +456,34 @@ struct GameState {
     uint8_t   pad2409[0x340b - 0x2409]; // 0x2409 player record backup ...
     PlayerRec players[8];            // 0x340b
     CmdPacket commands[8];           // 0x7413
-    Thing     things[1000];          // 0x7463 slot 0 = scratch sentinel; the pool loop walks 1..999
+    T         things[1000];          // 0x7463 slot 0 = scratch sentinel; the pool loop walks 1..999
     LevelData level;                 // 0x2f503 the level file, loaded verbatim (things at 0x2f945)
     uint32_t  creature_count;        // 0x38c9f creatures in the level file (switch_activate_356e0)
     uint32_t  spells_present[24];    // 0x38ca3 count of class-12 records per spell
 };
-static_assert(sizeof(GameState) == 0x38d03);
-static_assert(offsetof(GameState, volcano_thing) == 0x24);
-static_assert(offsetof(GameState, level_music_track) == 0x240);
-static_assert(offsetof(GameState, free_list) == 0x251);
-static_assert(offsetof(GameState, active_top) == 0x11f1);
-static_assert(offsetof(GameState, opt_second_surface) == 0x2195);
-static_assert(offsetof(GameState, texture_block_size) == 0x21a0);
-static_assert(offsetof(GameState, opt_allowed) == 0x21ad);
-static_assert(offsetof(GameState, players) == 0x340b);
-static_assert(offsetof(GameState, commands) == 0x7413);
+using GameState      = GameStateT<Thing>;
+using GameStateImage = GameStateT<ThingImage>;
+constexpr size_t MC_STATE_IMAGE_SIZE = 0x38d03;   // the original's GameState (movie/gam*.dat, save states)
+static_assert(sizeof(GameStateImage) == MC_STATE_IMAGE_SIZE);
+static_assert(offsetof(GameStateImage, volcano_thing) == 0x24);
+static_assert(offsetof(GameStateImage, level_music_track) == 0x240);
+static_assert(offsetof(GameStateImage, free_list) == 0x251);
+static_assert(offsetof(GameStateImage, active_top) == 0x11f1);
+static_assert(offsetof(GameStateImage, opt_second_surface) == 0x2195);
+static_assert(offsetof(GameStateImage, texture_block_size) == 0x21a0);
+static_assert(offsetof(GameStateImage, opt_allowed) == 0x21ad);
+static_assert(offsetof(GameStateImage, players) == 0x340b);
+static_assert(offsetof(GameStateImage, commands) == 0x7413);
+static_assert(offsetof(GameStateImage, things) == 0x7463);
+static_assert(offsetof(GameStateImage, level) == 0x2f503);
+static_assert(offsetof(GameStateImage, level.things) == 0x2f945);
+static_assert(offsetof(GameStateImage, level.win_percent) == 0x38c93);
+static_assert(offsetof(GameStateImage, level.player_block) == 0x385d3);
+static_assert(offsetof(GameStateImage, creature_count) == 0x38c9f);
+static_assert(offsetof(GameStateImage, spells_present) == 0x38ca3);
+// Everything in front of the Things is the same in both forms (Thing.player offsets stay valid).
 static_assert(offsetof(GameState, things) == 0x7463);
-static_assert(offsetof(GameState, level) == 0x2f503);
-static_assert(offsetof(GameState, level.things) == 0x2f945);
-static_assert(offsetof(GameState, level.win_percent) == 0x38c93);
-static_assert(offsetof(GameState, level.player_block) == 0x385d3);
-static_assert(offsetof(GameState, creature_count) == 0x38c9f);
-static_assert(offsetof(GameState, spells_present) == 0x38ca3);
+static_assert(sizeof(GameState) == MC_STATE_IMAGE_SIZE + 1000 * (sizeof(Thing) - sizeof(ThingImage)));
 
 // The config / flags block (0x8e7e bytes), pointed to by g_cfg.
 struct Config {

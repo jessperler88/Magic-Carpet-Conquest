@@ -11,6 +11,7 @@
 #include "mc_globals.h"
 #include "mc_math.h"
 #include "world_set.h"
+#include "world.h"
 #include "gen/terrain_tables.h"
 #include <cstring>
 
@@ -548,10 +549,11 @@ void terrain_build(const GenMap &gen) {
 // the cell quad that contains the point. Quads alternate their diagonal with the parity of
 // (x_cell + y_cell): even quads split along the (x,y)-(x+1,y+1) diagonal, odd ones along
 // (x+1,y)-(x,y+1). Result = corner height * 0x20 + (gradient terms) >> 3 (fractions are 0..255).
-int terrain_sample_height(uint16_t x, uint16_t y) {
-    uint8_t cx = (uint8_t)(x >> 8), cy = (uint8_t)(y >> 8);
+int terrain_sample_height(int32_t x, int32_t y) {
+    const int cx = world_cx(x), cy = world_cx(y);
     int fx = x & 0xff, fy = y & 0xff;
-    int h00 = H(cx, cy), h10 = H(cx + 1, cy), h01 = H(cx, cy + 1), h11 = H(cx + 1, cy + 1);
+    auto hw = [](int cx_, int cy_) -> int { return g_map_height[world_cell(cx_, cy_)]; };
+    int h00 = hw(cx, cy), h10 = hw(cx + 1, cy), h01 = hw(cx, cy + 1), h11 = hw(cx + 1, cy + 1);
     if (((cx + cy) & 1) == 0) {
         if (fx > fy) return h00 * 0x20 + (((h11 - h10) * fy + (h10 - h00) * fx) >> 3);
         return h00 * 0x20 + (((h11 - h01) * fx + (h01 - h00) * fy) >> 3);

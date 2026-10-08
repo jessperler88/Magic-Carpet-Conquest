@@ -1665,7 +1665,7 @@ static void test_spell_effects() {
 // ---- 3. level start versus the engine's snapshot ---------------------------------------------------
 
 static std::vector<uint8_t> g_snap_gam;
-static const GameState *snap() { return reinterpret_cast<const GameState *>(g_snap_gam.data()); }
+static const GameStateImage *snap() { return reinterpret_cast<const GameStateImage *>(g_snap_gam.data()); }
 static bool load_raw_snapshot(const char *game_dir) {
     char path[1024];
     mc_blob b;
@@ -1673,7 +1673,7 @@ static bool load_raw_snapshot(const char *game_dir) {
     if (!mc_read_file(path, &b)) return false;
     g_snap_gam.assign(b.data, b.data + b.len);
     mc_blob_free(&b);
-    return g_snap_gam.size() == sizeof(GameState);
+    return g_snap_gam.size() == MC_STATE_IMAGE_SIZE;
 }
 
 // Test-only stand-in for creature_wake_tick_468e0 / creature_proximity_wake_timer_46960 (task E),
@@ -1700,7 +1700,7 @@ static void test_wake_tick() {
 
 // gate = false: the same run with the balls always awake (no CHECKs; shows that the awake gate matters).
 static void test_level_start_vs_snapshot(bool gate) {
-    const GameState *s = snap();
+    const GameStateImage *s = snap();
     if (!sim_load_level(38)) { std::printf("level 38 failed to load\n"); g_fail++; return; }
     // The crater of the second volcano is thing 503 in the snapshot and would be 501 here (the
     // original run had two more things alive by tick 18): two placeholders line the indices up, so
@@ -1722,7 +1722,8 @@ static void test_level_start_vs_snapshot(bool gate) {
     int both = 0, pos_eq = 0, vel_eq = 0, all_eq = 0, timer_eq = 0, merged_same = 0, sim_only = 0, snap_only_original = 0;
     int sim_left = 0;
     for (int i = 1; i < MC_THING_SLOTS; i++) {
-        const Thing *a = thing_at(i), *b = &s->things[i];
+        const Thing *a = thing_at(i);
+        const ThingImage *b = &s->things[i];
         bool sa = a->cls == 10 && a->type == 0x27, sb = b->cls == 10 && b->type == 0x27;
         if (sa) sim_left++;
         if (!start_ball[i]) continue;
@@ -1742,8 +1743,8 @@ static void test_level_start_vs_snapshot(bool gate) {
         if (p && a->mana == b->mana && a->mana > 0x200) merged_same++;
         if (gate && !(p && v && rest))
             std::printf("  ball #%d differs: sim pos %04x %04x %d v %d %d zv %d mana %d owner %d sprite %x | snapshot pos %04x %04x %d v %d %d zv %d mana %d owner %d sprite %x\n",
-                        i, a->x, a->y, a->z, (int16_t)a->home.x, (int16_t)a->home.y, a->z_vel, a->mana, a->mana_owner, a->sprite,
-                        b->x, b->y, b->z, (int16_t)b->home.x, (int16_t)b->home.y, b->z_vel, b->mana, b->mana_owner, b->sprite);
+                        i, (unsigned)a->x, (unsigned)a->y, a->z, (int16_t)a->home.x, (int16_t)a->home.y, a->z_vel, a->mana, a->mana_owner, a->sprite,
+                        (unsigned)b->x, (unsigned)b->y, b->z, (int16_t)b->home.x, (int16_t)b->home.y, b->z_vel, b->mana, b->mana_owner, b->sprite);
     }
     std::printf("level 38 start + 412 ticks vs snapshot, mana balls: %d at start, %d left in the port's run, %d slots hold a ball in both; "
                 "position equal %d, velocity equal %d, every compared field equal %d, awake timer equal %d, merged balls with equal mana %d; "
@@ -1764,10 +1765,12 @@ static void test_level_start_vs_snapshot(bool gate) {
     CHECK_EQ(snap_only_original, 0);                   // the port never merges a ball the original kept
 
     // the erupting crater
-    const Thing *a = thing_at(503), *b = &s->things[503];
+    const Thing *a = thing_at(503);
+    const ThingImage *b = &s->things[503];
     CHECK(a->cls == 10 && a->type == 0x12 && b->cls == 10 && b->type == 0x12);
     std::printf("crater #503: port aux %d rng %08x yaw %04x tick %d health %d pos %04x %04x %d | snapshot aux %d rng %08x yaw %04x tick %d health %d pos %04x %04x %d\n",
-                a->aux, a->rng, a->yaw, a->tick, a->health, a->x, a->y, a->z, b->aux, b->rng, b->yaw, b->tick, b->health, b->x, b->y, b->z);
+                a->aux, a->rng, a->yaw, a->tick, a->health, (unsigned)a->x, (unsigned)a->y, a->z, b->aux, b->rng, b->yaw, b->tick,
+                b->health, (unsigned)b->x, (unsigned)b->y, b->z);
     CHECK_EQ(a->aux, b->aux);
     CHECK_EQ(a->rng, b->rng);
     CHECK_EQ(a->yaw, b->yaw);

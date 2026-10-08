@@ -13,6 +13,7 @@
 #include "settings.h"
 #include "constructors.h"
 #include "world_set.h"
+#include "world.h"
 #include "mc_math.h"
 #include "gen/constructors_tables.h"
 #include <cstring>
@@ -98,7 +99,7 @@ namespace {
 // 4..11): no thing at all, the position is stored as player N's start position
 // (GameState+0x23d9 + N*6) and null is returned.
 template <int N> Thing *player_create_flyer_start(const Pos *pos) {
-    std::memcpy(g_state->start_pos[N], pos, 6);
+    world_set_start_pos(N, *pos);
     return nullptr;
 }
 

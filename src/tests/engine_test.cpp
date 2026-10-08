@@ -56,9 +56,10 @@ static bool compare_level38_with_snapshot(const char *game) {
     mc_blob gam;
     mc_path_join(path, sizeof path, game, "movie/gam00000.dat");
     if (!mc_read_file(path, &gam)) { std::printf("snapshot missing, comparison skipped\n"); return true; }
-    if (gam.len != sizeof(GameState)) { mc_blob_free(&gam); std::printf("FAIL: snapshot size\n"); return false; }
-    GameState *snap = reinterpret_cast<GameState *>(gam.data);
-    bool ok = thing_relink_snapshot(snap);
+    if (gam.len != MC_STATE_IMAGE_SIZE) { mc_blob_free(&gam); std::printf("FAIL: snapshot size\n"); return false; }
+    static GameState snap_state;
+    GameState *snap = &snap_state;
+    bool ok = thing_load_snapshot_image(gam.data, snap);
     int stat[16][2] = {};     // per class: static things in the snapshot / matched in the same slot
     for (int i = 1; i < MC_THING_SLOTS && ok; i++) {
         const Thing &s = snap->things[i], &o = g_state->things[i];

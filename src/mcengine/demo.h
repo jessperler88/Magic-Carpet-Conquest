@@ -64,7 +64,7 @@ struct DemoPointerBases {
 };
 void demo_set_pointer_bases(const DemoPointerBases &b);
 DemoPointerBases demo_pointer_bases();
-// The GameState `src` in the original's layout (sizeof(GameState) bytes at dst).
+// The GameState `src` in the original's layout (MC_STATE_IMAGE_SIZE bytes at dst).
 void demo_state_to_original(const GameState *src, uint8_t *dst);
 extern void (*g_hook_demo_textures_mark)();     // texture_mark_needed_4c130 when a recording starts
 

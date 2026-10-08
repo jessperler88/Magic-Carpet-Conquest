@@ -60,11 +60,11 @@ static bool generate_level() {
     std::memset(g_state->things, 0, sizeof g_state->things);
     g_state->creature_count = 0;
     std::memset(g_state->spells_present, 0, sizeof g_state->spells_present);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
-    std::memset(g_map_type, 0, sizeof g_map_type);
-    std::memset(g_map_height, 0, sizeof g_map_height);
-    std::memset(g_map_light, 0, sizeof g_map_light);
-    std::memset(g_map_flags, 0, sizeof g_map_flags);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
+    std::memset(g_map_type, 0, g_world.cells);
+    std::memset(g_map_height, 0, g_world.cells);
+    std::memset(g_map_light, 0, g_world.cells);
+    std::memset(g_map_flags, 0, g_world.cells);
     std::memset(g_cfg->creature_lists, 0, sizeof g_cfg->creature_lists);
     g_cfg->player_list = g_cfg->mana_ball_list = g_cfg->wizard_list = g_cfg->projectile_list = 0;
     long got = rnc_unpack(s_level_packed.data(), s_level_packed.size(), reinterpret_cast<uint8_t *>(&g_state->level), sizeof(LevelData));
@@ -289,13 +289,14 @@ int main(int argc, char **argv) {
     mc_path_join(path, sizeof path, game_dir, "movie/map00000.dat");
     if (!mc_read_file(path, &dump) || dump.len < 0x60000) { std::fprintf(stderr, "cannot read %s\n", path); return 2; }
     mc_path_join(path, sizeof path, game_dir, "movie/gam00000.dat");
-    if (!mc_read_file(path, &gam) || gam.len != sizeof(GameState)) { std::fprintf(stderr, "cannot read %s\n", path); return 2; }
+    if (!mc_read_file(path, &gam) || gam.len != MC_STATE_IMAGE_SIZE) { std::fprintf(stderr, "cannot read %s\n", path); return 2; }
     s_ref[kType] = dump.data;
     s_ref[kHeight] = dump.data + 0x10000;
     s_ref[kLight] = dump.data + 0x20000;
     s_ref[kFlags] = dump.data + 0x30000;
-    GameState *snap = reinterpret_cast<GameState *>(gam.data);
-    CHECK(thing_relink_snapshot(snap));
+    static GameState snap_state;
+    GameState *snap = &snap_state;
+    CHECK(thing_load_snapshot_image(gam.data, snap));
 
     // ---- stage A: generate with both video modes ----
     Maps maps[2];
@@ -376,9 +377,9 @@ int main(int argc, char **argv) {
         if (!same || verbose)
             std::printf("   #%3d (%3u,%3u) z %5d size %2u ext %d %d %d %d home %u %u %d state 0x%02x hp %d/%d flags %x prop %x cap %d rng %08x\n"
                         "   snap #%3d      z %5d size %2u ext %d %d %d %d home %u %u %d state 0x%02x hp %d/%d flags %x prop %x cap %d rng %08x%s\n",
-                        i, t.x >> 8, t.y >> 8, t.z, t.castle_size, t.ext_z0, t.ext_x, t.ext_y, t.ext_h, t.home.x, t.home.y, t.home.z, t.state,
+                        i, t.x >> 8, t.y >> 8, t.z, t.castle_size, t.ext_z0, t.ext_x, t.ext_y, t.ext_h, (unsigned)t.home.x, (unsigned)t.home.y, t.home.z, t.state,
                         t.health, t.max_health, t.flags, t.prop_flags, t.speed_base, t.rng,
-                        (int)(s - snap->things), s->z, s->castle_size, s->ext_z0, s->ext_x, s->ext_y, s->ext_h, s->home.x, s->home.y, s->home.z, s->state,
+                        (int)(s - snap->things), s->z, s->castle_size, s->ext_z0, s->ext_x, s->ext_y, s->ext_h, (unsigned)s->home.x, (unsigned)s->home.y, s->home.z, s->state,
                         s->health, s->max_health, s->flags, s->prop_flags, s->speed_base, s->rng, same ? "" : "  DIFFERS");
     }
     std::printf("   generated %d, in the snapshot %d; still there %d, of those: same thing index %d, all of position (x, y, z),\n"

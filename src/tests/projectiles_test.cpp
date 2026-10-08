@@ -780,7 +780,7 @@ static void test_lightning() {
     CHECK(wander_of[80] >= -24 && wander_of[80] <= 24);
     CHECK(wander_of[79] >= -36 && wander_of[79] <= 36);
     CHECK(t->rng != rng0);
-    std::printf("lightning: 81 segments, widest wander %d units, end at %04x %04x %d\n", max_w, end.x, end.y, end.z);
+    std::printf("lightning: 81 segments, widest wander %d units, end at %04x %04x %d\n", max_w, (unsigned)end.x, (unsigned)end.y, end.z);
     // the impact effect: one segment step past the last segment, with the last wander
     CHECK(effect != nullptr);
     if (effect) {
@@ -1299,7 +1299,7 @@ static void test_snapshot_arrows() {
         for (int k = 0; k < updates; k++) math_rotate_offset(&q, t->yaw, t->pitch, 0x180);
         bool exact = pos_eq(q, *thing_pos(t)) && yaw == t->yaw && pitch == t->pitch;
         std::printf("   %d update(s); from the owner's present position: yaw %03x pitch %03x, predicted %04x %04x %d, actual %04x %04x %d%s\n",
-                    updates, yaw, pitch, q.x, q.y, q.z, t->x, t->y, t->z, exact ? "  (exact)" : "");
+                    updates, yaw, pitch, (unsigned)q.x, (unsigned)q.y, q.z, (unsigned)t->x, (unsigned)t->y, t->z, exact ? "  (exact)" : "");
         if (exact) exact_launch++;
         // in any case the arrow is `updates` steps from somewhere close to its owner
         Pos back = *thing_pos(t);
@@ -1373,11 +1373,11 @@ static void report_null_hit_index(const char *game_dir) {
     std::snprintf(path, sizeof path, "%s/movie/gam00000.dat", game_dir);
     std::FILE *f = std::fopen(path, "rb");
     if (!f) return;
-    std::vector<uint8_t> raw(sizeof(GameState));
+    std::vector<uint8_t> raw(MC_STATE_IMAGE_SIZE);
     size_t got = std::fread(raw.data(), 1, raw.size(), f);
     std::fclose(f);
     if (got != raw.size()) return;
-    const GameState *s = reinterpret_cast<const GameState *>(raw.data());
+    const GameStateImage *s = reinterpret_cast<const GameStateImage *>(raw.data());
     // the largest pointer on the free stack belongs to the highest free slot (thing_relink_snapshot)
     uint32_t max_ptr = 0;
     for (int i = 0; i <= s->free_top && i < MC_THING_SLOTS; i++)
@@ -1385,8 +1385,8 @@ static void report_null_hit_index(const char *game_dir) {
     int max_idx = 0;
     for (int i = MC_THING_SLOTS - 1; i >= 1; i--) if (s->things[i].cls == 0) { max_idx = i; break; }
     if (!max_idx || !max_ptr) return;
-    uint32_t things_base = max_ptr - (uint32_t)max_idx * (uint32_t)sizeof(Thing);
-    int32_t q = (int32_t)(0u - things_base) / (int32_t)sizeof(Thing);         // sar / idiv as in 0x444d1
+    uint32_t things_base = max_ptr - (uint32_t)max_idx * (uint32_t)sizeof(ThingImage);
+    int32_t q = (int32_t)(0u - things_base) / (int32_t)sizeof(ThingImage);    // sar / idiv as in 0x444d1
     std::printf("null-hit index: the snapshot's Thing pool was at 0x%08x, so a projectile that hit nothing stored "
                 "target = 0x%04x (%u) in its impact effect; the port stores %u\n",
                 things_base, (unsigned)(uint16_t)q, (unsigned)(uint16_t)q, (unsigned)g_projectile_null_hit_index);

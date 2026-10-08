@@ -728,7 +728,7 @@ struct RunStats {
             }
             if (!ok && bad++ < 5)
                 std::printf("  tick %d: thing %d type %d state %d sprite %d speed %d aux %d flags %x at %04x,%04x (tex %02x) breaks an invariant\n",
-                            tick, i, t->type, t->state, t->sprite, t->speed_cur, t->aux, t->flags, t->x, t->y,
+                            tick, i, t->type, t->state, t->sprite, t->speed_cur, t->aux, t->flags, (unsigned)t->x, (unsigned)t->y,
                             g_map_type[((unsigned)(t->y >> 8) << 8) | (t->x >> 8)]);
         }
         for (int s = 0; s < 128; s++) { if (now[s]) seen[s]++; if (now[s] > peak[s]) peak[s] = now[s]; }

@@ -546,7 +546,7 @@ static void test_movement() {
     int found = ai_find_castle_site(w);
     CHECK_EQ(found, 1);
     if (found) {
-        std::printf("   castle site for wizard 1 at (%d,%d): cell %d,%d (wizard at cell %d,%d)\n", w->home.x, w->home.y,
+        std::printf("   castle site for wizard 1 at (%d,%d): cell %d,%d (wizard at cell %d,%d)\n", (int)w->home.x, (int)w->home.y,
                     w->home.x >> 8, w->home.y >> 8, w->x >> 8, w->y >> 8);
         CHECK((w->home.x & 0x3fff) == 0 || (w->home.x & 0xff) == 0);
         // No castle within 0x3000 (Chebyshev) of the site.
@@ -675,7 +675,7 @@ static void test_snapshot_fields(const Snapshot &snap) {
         CHECK_EQ(r.is_computer, 1);
         CHECK_EQ(w.cls, 3); CHECK_EQ(w.type, 1); CHECK_EQ(w.state, 1);
         std::printf("   player %d thing %d: mode 0x%x (%s), target %d sig 0x%x, home (%d,%d,%d), cell %d,%d z %d yaw %d\n",
-                    p, r.thing, P.ai_mode, mode_name(P.ai_mode), w.target, w.unk94, w.home.x, w.home.y, w.home.z,
+                    p, r.thing, P.ai_mode, mode_name(P.ai_mode), w.target, w.unk94, (int)w.home.x, (int)w.home.y, w.home.z,
                     w.x >> 8, w.y >> 8, w.z, w.yaw);
         std::printf("      aggr %d acc %d react %d; burst %d conserve %d; target_speed %d accel %d strafe %d; invuln %d regen %d; "
                     "castle %d level %d; mana %d / %d, health %d / %d, aim %d\n",

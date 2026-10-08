@@ -547,15 +547,14 @@ static bool load_snapshot(const char *game_dir) {
     if (!mc_read_file(path, &gam)) return false;
     mc_path_join(path, sizeof path, game_dir, "movie/map00000.dat");
     if (!mc_read_file(path, &map)) { mc_blob_free(&gam); return false; }
-    bool ok = gam.len == sizeof(GameState) && map.len >= 0x60000;
+    bool ok = gam.len == MC_STATE_IMAGE_SIZE && map.len >= 0x60000;
     if (ok) {
-        std::memcpy(g_state, gam.data, sizeof(GameState));
         std::memcpy(g_map_type, map.data, 0x10000);
         std::memcpy(g_map_height, map.data + 0x10000, 0x10000);
         std::memcpy(g_map_light, map.data + 0x20000, 0x10000);
         std::memcpy(g_map_flags, map.data + 0x30000, 0x10000);
         std::memcpy(g_cell_things, map.data + 0x40000, 0x20000);
-        ok = thing_relink_snapshot(g_state);
+        ok = thing_load_snapshot_image(gam.data, g_state);
     }
     mc_blob_free(&gam);
     mc_blob_free(&map);
@@ -759,7 +758,7 @@ static void test_frames() {
     }
     const Thing &td = g_state->things[dense], &tc = g_state->things[cre], &tw = g_state->things[water];
     std::printf("viewpoints: dense thing %d at (%d,%d) with %d neighbours; creature %d at (%d,%d) with %d creatures near; water thing %d at (%d,%d)\n",
-                dense, td.x, td.y, best_dense, cre, tc.x, tc.y, best_cre, water, tw.x, tw.y);
+                dense, (int)td.x, (int)td.y, best_dense, cre, (int)tc.x, (int)tc.y, best_cre, water, (int)tw.x, (int)tw.y);
     CHECK(dense != 0 && cre != 0 && water != 0);
 
     g_state->view_size = 0x28;

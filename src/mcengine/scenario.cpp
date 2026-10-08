@@ -786,7 +786,7 @@ std::string cmd_query(const ParsedCommand &q) {
         if (!t) return who_text(who) + ": nothing there";
         std::snprintf(b, sizeof b, "%s: slot %d %s at cell %d,%d (%dw,%dw) z %d yaw %d health %d/%d mana %d/%d state %d",
                       who_text(who).c_str(), (int)thing_index(t), cmd_thing_name(t->cls, t->type).c_str(), t->x >> 8, t->y >> 8,
-                      t->x, t->y, t->z, t->yaw, t->health, t->max_health, t->mana, t->mana_total, t->state);
+                      (int)t->x, (int)t->y, t->z, t->yaw, t->health, t->max_health, t->mana, t->mana_total, t->state);
         return b;
     }
     size_t i = 1;
@@ -848,7 +848,7 @@ bool cmd_check(const Assertion &a, std::string *detail) {
         if (!t) { std::snprintf(b, sizeof b, "%s: nothing there", who_text(a.who).c_str()); break; }
         const int dx = std::abs((int)(int16_t)(uint16_t)(t->x - a.x)), dy = std::abs((int)(int16_t)(uint16_t)(t->y - a.y));
         ok = dx <= a.r && dy <= a.r;
-        std::snprintf(b, sizeof b, "%s at %d,%d (cell %d,%d), wanted %d,%d +- %d", who_text(a.who).c_str(), t->x, t->y, t->x >> 8, t->y >> 8,
+        std::snprintf(b, sizeof b, "%s at %d,%d (cell %d,%d), wanted %d,%d +- %d", who_text(a.who).c_str(), (int)t->x, (int)t->y, t->x >> 8, t->y >> 8,
                       a.x, a.y, a.r);
         break;
     }

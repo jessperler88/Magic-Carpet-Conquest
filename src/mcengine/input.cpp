@@ -257,8 +257,9 @@ static Thing *spell_of_slot(const Thing *t, int slot) {
         const uint8_t *lo = reinterpret_cast<const uint8_t *>(g_state);
         const uint8_t *hi = lo + sizeof(GameState);
         if (P >= lo && P < hi) {
-            const uint8_t *addr = P + (ptrdiff_t)offsetof(PlayerBlock, spell_slot) + (ptrdiff_t)slot * 4;
-            if (addr >= lo && addr + 4 <= hi) std::memcpy(&idx, addr, 4);
+            // round 11: the address in the original's layout (mc_image.h)
+            const intptr_t off = (P - lo) + (intptr_t)offsetof(PlayerBlock, spell_slot) + (intptr_t)slot * 4;
+            if (off >= 0 && off + 4 <= (intptr_t)MC_STATE_IMAGE_SIZE) state_image_read(*g_state, off, &idx, 4);
         }
     }
     return thing_at((idx > 0 && idx < thing_pool_slots()) ? (unsigned)idx : 0u);

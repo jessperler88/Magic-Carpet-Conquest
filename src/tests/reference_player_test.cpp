@@ -385,12 +385,12 @@ static void watch_tick(Watch &w, int tick, bool verbose) {
                 if (!count[c][ty]) continue;
                 const Thing *o = thing_at(first[c][ty]);
                 std::printf("  %5d new cls %2d type %2d x%d (slot %d state %d at %d,%d,%d)\n", tick, c, ty, count[c][ty],
-                            first[c][ty], o->state, o->x, o->y, o->z);
+                            first[c][ty], o->state, (int)o->x, (int)o->y, o->z);
             }
     if (verbose && (pt->state != w.last_state || P->castle != w.last_castle))
         std::printf("  %5d player thing %d state %d health %d/%d mana %d/%d castle %d (level %d) pos %d,%d,%d\n", tick, pidx,
-                    pt->state, pt->health, pt->max_health, pt->mana, pt->mana_total, P->castle, P->castle_level, pt->x,
-                    pt->y, pt->z);
+                    pt->state, pt->health, pt->max_health, pt->mana, pt->mana_total, P->castle, P->castle_level, (int)pt->x,
+                    (int)pt->y, pt->z);
     for (int id = 0; id < 24; id++) {
         const Thing *sp = P->spell_thing[id] ? thing_at(P->spell_thing[id] % MC_THING_SLOTS) : nullptr;
         int ct = sp ? sp->cast_ticks : 0;
@@ -398,7 +398,7 @@ static void watch_tick(Watch &w, int tick, bool verbose) {
             w.casts[id]++;
             if (verbose)
                 std::printf("  %5d CAST spell %2d (cast_ticks %d) mana %d/%d pos %d,%d,%d yaw %d pitch %d\n", tick, id, ct, pt->mana,
-                            pt->mana_total, pt->x, pt->y, pt->z, pt->yaw, pt->pitch);
+                            pt->mana_total, (int)pt->x, (int)pt->y, pt->z, pt->yaw, pt->pitch);
         }
         w.cast_prev[id] = ct;
     }

@@ -76,11 +76,59 @@ def eval_expr(expr: str, structs) -> int | None:
         return None
 
 
+def expand_templates(src: str) -> str:
+    """Round 11: `template <class C> struct XT { ... };` + `using A = XT<arg>;` -> a plain `struct A { ... };`
+    appended to the source (the parameter replaced, nested `YT<arg>` uses replaced by their alias)."""
+    tmpl = {}
+    for m in re.finditer(r"template\s*<\s*class\s+(\w+)\s*>\s*struct\s+(\w+)\s*\{", src):
+        body, _ = brace_body(src, m.end() - 1)
+        tmpl[m.group(2)] = (m.group(1), body)
+    if not tmpl:
+        return src
+    # each plain struct is inserted right after its `using` line, so the structs after it can use it
+    inst = {}
+    pieces, pos = [], 0
+    for m in re.finditer(r"\busing\s+(\w+)\s*=\s*(\w+)\s*<\s*(\w+)\s*>\s*;", src):
+        alias, name, arg = m.groups()
+        if name not in tmpl:
+            continue
+        param, body = tmpl[name]
+        body = re.sub(rf"\b{param}\b", arg, body)
+        body = re.sub(r"\b(\w+)\s*<\s*(\w+)\s*>", lambda k: inst.get((k.group(1), k.group(2)), k.group(0)), body)
+        inst[(name, arg)] = alias
+        pieces.append(src[pos:m.end()])
+        pieces.append(f"\nstruct {alias} {{{body}}};\n")
+        pos = m.end()
+    pieces.append(src[pos:])
+    out = "".join(pieces)
+    # the template definitions themselves are not structs of any layout
+    for name in tmpl:
+        out = re.sub(rf"template\s*<\s*class\s+\w+\s*>\s*struct\s+{name}\s*\{{", f"struct __template_{name} {{", out)
+    return out
+
+
+# Round 11: the port's in-memory Thing / Pos / GameState have int32 coordinates; save states, desync dumps and
+# reference dumps hold the original's byte image (mc_image.h), so the tables use the image layouts under the
+# canonical names.
+IMAGE_ALIASES = {"ThingImage": "Thing", "PosImage": "Pos", "GameStateImage": "GameState"}
+
+
+def use_image_layouts(structs):
+    if not all(k in structs for k in IMAGE_ALIASES):
+        return structs
+    for s in structs.values():
+        for f in s["fields"]:
+            f.type = IMAGE_ALIASES.get(f.type, f.type)
+    for img, name in IMAGE_ALIASES.items():
+        structs[name] = structs[img]
+    return structs
+
+
 def parse_headers(paths):
     structs = {}       # name -> {"size": n, "fields": [Field]}
     asserts = []
     for path in paths:
-        src = strip_comments(Path(path).read_text(encoding="utf-8", errors="replace"))
+        src = expand_templates(strip_comments(Path(path).read_text(encoding="utf-8", errors="replace")))
         pos = 0
         for m in re.finditer(r"static_assert\s*\(\s*sizeof\s*\(\s*(\w+)\s*\)\s*==\s*([^;]+?)\)\s*;", src):
             asserts.append((m.group(1), m.group(2)))
@@ -420,7 +468,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     headers = [args.types] + ([str(MODE_H)] if MODE_H.exists() else [])
-    S = parse_headers(headers)
+    S = use_image_layouts(parse_headers(headers))
     for need in ("GameState", "Thing", "PlayerRec", "Config"):
         if need not in S:
             print(f"diff_state: {need} not found in {args.types}", file=sys.stderr)

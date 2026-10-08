@@ -56,9 +56,9 @@ static int32_t spell_slot_raw(const PlayerBlock *P, int slot) {
     }
     const intptr_t off = reinterpret_cast<const uint8_t *>(P) - reinterpret_cast<const uint8_t *>(g_state)
                          + (intptr_t)offsetof(PlayerBlock, spell_slot) + (intptr_t)slot * 4;
-    if (off < 0 || off + 4 > (intptr_t)sizeof(GameState)) return 0;
+    if (off < 0 || off + 4 > (intptr_t)MC_STATE_IMAGE_SIZE) return 0;
     int32_t v;
-    std::memcpy(&v, reinterpret_cast<const uint8_t *>(g_state) + off, 4);
+    state_image_read(*g_state, off, &v, 4);         // round 11: the original's layout (mc_image.h)
     return v;
 }
 

@@ -568,13 +568,19 @@ uint32_t state_checksum(NetChecksumParts *parts) {
         H.add(NCP_POOL_EXT, thing_pool_ext_free_stack(), (size_t)ext * sizeof(int32_t));
         H.add(NCP_POOL_EXT, thing_pool_ext_active_stack(), (size_t)ext * sizeof(int32_t));
     }
+    // Round 11: each Thing is hashed in the original's byte layout (mc_image.h), so the value is the one of
+    // rounds 6..10; a world wider than 256 cells also hashes the coordinates' high halves.
+    const bool wide = g_world.size > 256;
     for (int i = 0; i < MC_THING_SLOTS + ext; i++) {
-        Thing t = i < MC_THING_SLOTS ? s->things[i] : *thing_at((unsigned)i);
+        const Thing &src = i < MC_THING_SLOTS ? s->things[i] : *thing_at((unsigned)i);
+        ThingImage t;
+        thing_to_image(src, &t);
         if ((t.cls == 3 && t.type == 0) || t.cls == 0xc) t.flags &= ~1u;
         const int part = NCP_THINGS + (t.cls < 15 ? t.cls : 15);
         const uint32_t slot = (uint32_t)i;
         H.part_only(part, &slot, sizeof slot);
         H.add(part, &t, sizeof t);
+        if (wide) { const ThingHi hi = thing_hi(src); H.add(part, &hi, sizeof hi); }
     }
     for (int p = 0; p < 8; p++) {
         const PlayerRec &r = s->players[p];
@@ -595,6 +601,10 @@ uint32_t state_checksum(NetChecksumParts *parts) {
         P[offsetof(PlayerBlock, damage_flash)] = 0;
         std::memset(P + offsetof(PlayerBlock, spell_flash), 0, sizeof r.blk.spell_flash);
         H.add(part, P, sizeof P);
+        if (wide) {                                         // round 11: start position high halves (world.h)
+            const uint16_t hi[2] = {g_world_hi.start_x[p], g_world_hi.start_y[p]};
+            H.add(part, hi, sizeof hi);
+        }
     }
     H.add(NCP_MAP_TYPE, g_map_type, MC_MAP_CELLS);
     H.add(NCP_MAP_HEIGHT, g_map_height, MC_MAP_CELLS);

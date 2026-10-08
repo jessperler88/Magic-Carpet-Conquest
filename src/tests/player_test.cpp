@@ -37,15 +37,14 @@ static bool load_snapshot(const char *game_dir) {
     if (!mc_read_file(path, &gam)) return false;
     mc_path_join(path, sizeof path, game_dir, "movie/map00000.dat");
     if (!mc_read_file(path, &map)) { mc_blob_free(&gam); return false; }
-    bool ok = gam.len == sizeof(GameState) && map.len >= 0x60000;
+    bool ok = gam.len == MC_STATE_IMAGE_SIZE && map.len >= 0x60000;
     if (ok) {
-        std::memcpy(g_state, gam.data, sizeof(GameState));
         std::memcpy(g_map_type, map.data, 0x10000);
         std::memcpy(g_map_height, map.data + 0x10000, 0x10000);
         std::memcpy(g_map_light, map.data + 0x20000, 0x10000);
         std::memcpy(g_map_flags, map.data + 0x30000, 0x10000);
         std::memcpy(g_cell_things, map.data + 0x40000, 0x20000);
-        ok = thing_relink_snapshot(g_state);
+        ok = thing_load_snapshot_image(gam.data, g_state);
     }
     mc_blob_free(&gam);
     mc_blob_free(&map);
@@ -171,8 +170,7 @@ static void test_snapshot_static(const GameState &snap) {
     }
     // player_spawn puts the wizard 0x100 above the ground of the start position; player 0 has not
     // moved in the 412 ticks before the snapshot (speed 0), so it must still be exactly there.
-    Pos start;
-    std::memcpy(&start, g_state->start_pos[0], sizeof start);
+    Pos start = world_start_pos(0);
     CHECK_EQ(t0->x, start.x);
     CHECK_EQ(t0->y, start.y);
     CHECK_EQ(t0->z, terrain_height_at(&start) + 0x100);
@@ -201,7 +199,7 @@ static void test_snapshot_static(const GameState &snap) {
         CHECK(c.cam_x == t0->x && c.cam_y == t0->y && c.cam_z == t0->z + 0x80 && c.yaw == t0->yaw);
         CHECK(c.pitch == 0 && c.roll == 0 && c.zoom == 0x80);
         std::printf("snapshot: player 0 thing %d at (%04x, %04x, %d) yaw %03x; camera x %d y %d z %d yaw %d pitch %d roll %d zoom %d\n",
-                    r0.thing, t0->x, t0->y, t0->z, t0->yaw, c.cam_x, c.cam_y, c.cam_z, c.yaw, c.pitch, c.roll, c.zoom);
+                    r0.thing, (unsigned)t0->x, (unsigned)t0->y, t0->z, t0->yaw, c.cam_x, c.cam_y, c.cam_z, c.yaw, c.pitch, c.roll, c.zoom);
     }
 
     // player_rebuild_spell_index reproduces P+0x2a4 of every player.
@@ -314,7 +312,7 @@ static void test_init_and_spawn(const GameState &snap) {
 
     // Spawn the four players of the level on an empty pool with test constructors.
     std::memset(g_state->things, 0, sizeof g_state->things);
-    std::memset(g_cell_things, 0, sizeof g_cell_things);
+    std::memset(g_cell_things, 0, g_world.cells * sizeof(uint16_t));
     thing_pool_reset();
     std::memset(g_cfg->creature_lists, 0, sizeof g_cfg->creature_lists);
     g_cfg->player_list = g_cfg->mana_ball_list = g_cfg->wizard_list = g_cfg->projectile_list = 0;
@@ -525,8 +523,7 @@ static void test_hits_and_death(const char *game_dir) {
     CHECK_EQ(rec->status & 0xc, 0xc);
     CHECK(rec->thing == thing_index(t) && t->state == 0 && !(t->flags & 0x20));
     CHECK(t->health == t->max_health && t->max_health == 10000 && t->mana == 1000);
-    Pos start;
-    std::memcpy(&start, g_state->start_pos[0], sizeof start);
+    Pos start = world_start_pos(0);
     CHECK(t->x == start.x && t->y == start.y && t->z == terrain_height_at(&start) + 0x100);
     for (int i = 0; i < 24; i++) {
         Thing *s = thing_at(P->spell_slot[i]);
@@ -663,7 +660,7 @@ static void test_replay(const char *game_dir, const Movie &mv, const GameState &
         CHECK(t->health == t->max_health && t->mana == t->mana_total);
         if (g_fail > 20) break;
         if (csv)
-            std::fprintf(csv, "%d,%u,%u,%d,%u,%u,%d,%d,%d,%u,%u,%d,%d,%u,%d,%d,%d,%d\n", ticks, t->x, t->y, t->z, t->yaw,
+            std::fprintf(csv, "%d,%u,%u,%d,%u,%u,%d,%d,%d,%u,%u,%d,%d,%u,%d,%d,%d,%d\n", ticks, (unsigned)t->x, (unsigned)t->y, t->z, t->yaw,
                          P->move_pitch, t->speed_cur, P->strafe_speed, ground, pk.cmd, pk.arg, pk.steer_x, pk.steer_y,
                          pk.bits, P->slot_left, P->slot_right, t->health, t->mana);
         path.push_back(*thing_pos(t));
@@ -681,7 +678,7 @@ static void test_replay(const char *game_dir, const Movie &mv, const GameState &
     std::printf("replay: path length %lld units (%.1f cells), moving in %d ticks, %d ticks with speed but no move, "
                 "%d ticks over water, fire keys in %d ticks\n", dist, dist / 256.0, moved_ticks, blocked, water_ticks, fired);
     std::printf("replay: max step %d units/tick, max |dz| %d, altitude above ground %d..%d, max |dyaw| %d, end (%04x, %04x, %d) yaw %03x\n",
-                max_step, max_dz, min_alt, max_alt, max_dyaw, t->x, t->y, t->z, t->yaw);
+                max_step, max_dz, min_alt, max_alt, max_dyaw, (unsigned)t->x, (unsigned)t->y, t->z, t->yaw);
     CHECK_EQ(ticks, mv.ticks + 1);                      // 8550 full ticks + the tick of the quit packet
     CHECK_EQ(demo_packets_read(), demo_packets_total());
     CHECK(!demo_playing());

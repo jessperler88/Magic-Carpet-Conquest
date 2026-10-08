@@ -310,10 +310,10 @@ static bool kill_creature_drops_ball() {
 static uint32_t fnv_bytes(const void *p, size_t n);
 static uint32_t level_hash() {
     uint32_t h = fnv_bytes(g_state, sizeof(GameState));
-    h ^= fnv_bytes(g_map_type, sizeof g_map_type) * 3u;
-    h ^= fnv_bytes(g_map_height, sizeof g_map_height) * 5u;
-    h ^= fnv_bytes(g_map_light, sizeof g_map_light) * 7u;
-    h ^= fnv_bytes(g_map_flags, sizeof g_map_flags) * 11u;
+    h ^= fnv_bytes(g_map_type, g_world.cells) * 3u;
+    h ^= fnv_bytes(g_map_height, g_world.cells) * 5u;
+    h ^= fnv_bytes(g_map_light, g_world.cells) * 7u;
+    h ^= fnv_bytes(g_map_flags, g_world.cells) * 11u;
     h ^= fnv_bytes(g_cell_things, sizeof(uint16_t) * MC_MAP_CELLS) * 13u;
     return h;
 }

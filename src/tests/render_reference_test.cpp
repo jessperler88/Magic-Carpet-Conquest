@@ -125,11 +125,8 @@ static bool load_state(const std::string &dir, int tick, GameState *out) {
     std::snprintf(name, sizeof name, "tick%05d.gam", tick);
     mc_blob b;
     if (!mc_read_file((dir + "/" + name).c_str(), &b)) return false;
-    bool ok = b.len == sizeof(GameState);
-    if (ok) {
-        std::memcpy(out, b.data, sizeof(GameState));
-        ok = thing_relink_snapshot(out);
-    }
+    bool ok = b.len == MC_STATE_IMAGE_SIZE;
+    if (ok) ok = thing_load_snapshot_image(b.data, out);
     mc_blob_free(&b);
     return ok;
 }
@@ -238,7 +235,7 @@ int main(int argc, char **argv) {
     }
     if (!engine_init(game_dir)) { std::printf("engine_init failed\n"); return 2; }
     g_hook_frame_state = nullptr;          // render_frame's state writes are done here, after the comparison
-    g_projectile_null_hit_index = (uint16_t)((int32_t)(0u - g_snapshot_things_base) / (int32_t)sizeof(Thing));
+    g_projectile_null_hit_index = (uint16_t)((int32_t)(0u - g_snapshot_things_base) / (int32_t)sizeof(ThingImage));
     g_cfg->flags = 0; g_cfg->paused = 0;
     sim_prepare_movie();
     if (!std::getenv("MC_RFB_NOGENLEVEL")) {

@@ -30,7 +30,7 @@ void terrain_build_lightmap();                                             // 31
 
 // terrain_sample_height_71e00: height at a world position interpolated over the quad's triangle
 // (height byte * 0x20 scale).
-int terrain_sample_height(uint16_t x, uint16_t y);
+int terrain_sample_height(int32_t x, int32_t y);   // round 11: world coordinates (world.h)
 
 // DAT_000b58b0: compact corner-class -> {texture, rotation code} table built by
 // terrain_assign_textures, index = c0*0x157 + c1*0x31 + c2*7 + c3 (corner classes (x,y), (x+1,y),

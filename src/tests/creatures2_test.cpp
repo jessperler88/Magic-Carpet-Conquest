@@ -793,7 +793,7 @@ static void test_snapshot_fields(const std::vector<Thing> &snap) {
         if (t.state == 0x78) continue;
         std::printf("  snapshot %s %d: state %d at %04x,%04x z %d yaw %03x health %d / %d mana %d / %d aux %d castle_size %d "
                     "timer_a %d target %d parent %d child %d sprite 0x%x speed %d / %d\n",
-                    t.type == 6 ? "kraken" : "type", i, t.state, t.x, t.y, t.z, t.yaw, (int)t.health, (int)t.max_health,
+                    t.type == 6 ? "kraken" : "type", i, t.state, (unsigned)t.x, (unsigned)t.y, t.z, t.yaw, (int)t.health, (int)t.max_health,
                     (int)t.mana, (int)t.mana_total, t.aux, t.castle_size, t.timer_a, t.target, t.parent, t.child, t.sprite,
                     t.speed_cur, t.speed_base);
         if (t.type == 6) {

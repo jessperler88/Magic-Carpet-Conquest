@@ -9,6 +9,7 @@
 #include "palette_fx.h"
 #include "net.h"
 #include "world_set.h"
+#include "world.h"
 #include "tick_profile.h"
 #include <cstdio>
 #include <cstring>
@@ -70,10 +71,11 @@ static int32_t spell_slot_raw(const Thing *t, int slot) {
     const uint8_t *lo = reinterpret_cast<const uint8_t *>(g_state);
     const uint8_t *hi = lo + sizeof(GameState);
     if (P < lo || P >= hi) return 0;                    // dummy block: outside the state in the port
-    const uint8_t *addr = P + (ptrdiff_t)offsetof(PlayerBlock, spell_slot) + (ptrdiff_t)slot * 4;
-    if (addr < lo || addr + 4 > hi) return 0;
+    // round 11: the address in the original's layout (mc_image.h; P blocks lie in front of the Things)
+    const intptr_t off = (P - lo) + (intptr_t)offsetof(PlayerBlock, spell_slot) + (intptr_t)slot * 4;
+    if (off < 0 || off + 4 > (intptr_t)MC_STATE_IMAGE_SIZE) return 0;
     int32_t v;
-    std::memcpy(&v, addr, 4);
+    state_image_read(*g_state, off, &v, 4);
     return v;
 }
 // Thing pointer from a raw index the original multiplies by 0xa4 unchecked; null for "not above
@@ -313,8 +315,7 @@ void player_spawn(PlayerRec *rec, Thing *t) {
     bool created = false;
     models_initialise();
     int p = (int)(rec - g_state->players);
-    Pos pos;
-    std::memcpy(&pos, g_state->start_pos[p], sizeof pos);
+    Pos pos = world_start_pos(p);
     pos.z = (int16_t)(terrain_height_at(&pos) + 0x100);
     if (t == thing_at(0)) {
         t = thing_create(&pos, 3, rec->is_computer == 1 ? 1 : 0);
@@ -874,8 +875,7 @@ void player_log_position(PlayerRec *rec, Thing *t) {
     if (idx >= 32) return;                              // log_count is 0x20 from players_init_records
     PosLogEntry *e = &rec->log[idx];
     PlayerBlock *P = player_block(t);
-    e->x = t->x;
-    e->y = t->y;
+    world_log_set_xy((int)(rec - g_state->players), e, t->x, t->y);    // round 11: + the high halves (world.h)
     (void)terrain_height_at(thing_pos(t));              // called, result discarded
     e->z = t->z;
     e->yaw = t->yaw;
@@ -890,8 +890,10 @@ Camera player_camera(int player) {
     const PlayerRec *rec = &g_state->players[player & 7];
     const PosLogEntry *e = &rec->log[rec->view_entry < 32 ? rec->view_entry : 31];
     Camera c;
-    c.cam_x = (int16_t)e->x;
-    c.cam_y = (int16_t)e->y;
+    // round 11: the original sign-extends the words (the renderers keep the low 16 bits); a wider world
+    // needs the whole coordinate (world.h)
+    c.cam_x = world_wide() ? world_log_x(player, *e) : (int16_t)e->x;
+    c.cam_y = world_wide() ? world_log_y(player, *e) : (int16_t)e->y;
     c.yaw   = (int16_t)e->yaw;
     c.cam_z = (int)e->z + 0x80;
     c.pitch = e->pitch;

@@ -253,29 +253,34 @@ bool demo_load_state(int number) {
     movie_path(path, sizeof path, ext ? "%s/gax%05d.dat" : "%s/gam%05d.dat", (int16_t)number);
     mc_blob gam;
     if (!mc_read_unpacked(path, &gam)) return false;            // demo_state_file_exists_3c310
-    if (ext ? gam.len < sizeof(GameState) + 4 : gam.len != sizeof(GameState)) { mc_blob_free(&gam); return false; }
-    uint8_t *st = reinterpret_cast<uint8_t *>(g_state);
-    uint8_t head[4], opts[0x24];
-    std::memcpy(head, st, 4);
-    std::memcpy(opts, st + 0x2195, sizeof opts);                // three 12-byte blocks: 0x2195, 0x21a1, 0x21ad
-    std::memcpy(st, gam.data, sizeof(GameState));               // file_load_rnc_3cbe0
-    std::memcpy(st + 0x2195, opts, sizeof opts);
-    std::memcpy(st, head, 4);
+    constexpr size_t kImage = MC_STATE_IMAGE_SIZE;
+    if (ext ? gam.len < kImage + 4 : gam.len != kImage) { mc_blob_free(&gam); return false; }
+    // file_load_rnc_3cbe0 over the state, keeping the first dword and the three 12-byte option blocks
+    // 0x2195, 0x21a1, 0x21ad (round 11: the file is the original's image, mc_image.h converts it)
     bool ok;
     if (ext) {
-        // port: the GameState is in the port's form already; the extension's Things follow it
+        // port: the GameState is in the port's index form already; the extension's Things follow it
+        static GameStateImage img;
+        std::memcpy(&img, gam.data, kImage);
+        std::memcpy(&img, g_state, 4);
+        std::memcpy(reinterpret_cast<uint8_t *>(&img) + 0x2195, reinterpret_cast<const uint8_t *>(g_state) + 0x2195, 0x24);
+        state_from_image(img, g_state);
         uint32_t slots = 0;
-        std::memcpy(&slots, gam.data + sizeof(GameState), 4);
+        std::memcpy(&slots, gam.data + kImage, 4);
         const size_t n = slots > (uint32_t)MC_THING_SLOTS ? slots - (uint32_t)MC_THING_SLOTS : 0;
-        const size_t base = sizeof(GameState) + 4 + n * sizeof(Thing);
+        const size_t base = kImage + 4 + n * sizeof(ThingImage);
         ok = slots == (uint32_t)thing_pool_wanted_slots() && (s_version == 3 ? gam.len >= base : gam.len == base);
         thing_pool_ext_reset();
-        if (ok && n) std::memcpy(thing_at(MC_THING_SLOTS), gam.data + sizeof(GameState) + 4, n * sizeof(Thing));
+        for (size_t i = 0; ok && i < n; i++) {
+            ThingImage ti;
+            std::memcpy(&ti, gam.data + kImage + 4 + i * sizeof(ThingImage), sizeof ti);
+            thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)));
+        }
         if (ok && s_version == 3) ok = load_v3_tail(gam.data + base, gam.len - base);
     } else {
         // demo_relink_state_pointers_3dc10 re-points the players' things at their records and rebases
         // the descriptor pointers; the port converts every pointer field to its index form.
-        ok = thing_relink_snapshot(g_state);
+        ok = thing_load_snapshot_image(gam.data, g_state, true);
         thing_pool_ext_reset();                                 // port: a 1000-slot image, empty extension
     }
     mc_blob_free(&gam);
@@ -317,28 +322,28 @@ bool demo_load_terrain(int number) {
 // demo_relink_state_pointers_3dc10 + models_initialise_354c0 (which rebuilds both stacks, so only
 // Thing.next / .player and the rebased .desc matter to it).
 void demo_state_to_original(const GameState *src, uint8_t *dst) {
-    std::memcpy(dst, src, sizeof(GameState));
+    state_to_image(*src, reinterpret_cast<GameStateImage *>(dst));
     const uint32_t state_base = s_bases.state;
-    const uint32_t things_base = state_base + (uint32_t)offsetof(GameState, things);
+    const uint32_t things_base = state_base + (uint32_t)offsetof(GameStateImage, things);
     auto ptr = [&](int32_t idx) -> uint32_t {
-        return (idx > 0 && idx < MC_THING_SLOTS) ? things_base + (uint32_t)idx * (uint32_t)sizeof(Thing) : 0u;
+        return (idx > 0 && idx < MC_THING_SLOTS) ? things_base + (uint32_t)idx * (uint32_t)sizeof(ThingImage) : 0u;
     };
     auto put = [&](size_t off, uint32_t v) { std::memcpy(dst + off, &v, 4); };
     for (int i = 0; i < 1000; i++) {
-        put(offsetof(GameState, free_list) + (size_t)i * 4, ptr(src->free_list[i]));
-        put(offsetof(GameState, active_list) + (size_t)i * 4, ptr(src->active_list[i]));
+        put(offsetof(GameStateImage, free_list) + (size_t)i * 4, ptr(src->free_list[i]));
+        put(offsetof(GameStateImage, active_list) + (size_t)i * 4, ptr(src->active_list[i]));
     }
     for (int i = 0; i < MC_THING_SLOTS; i++) {
         const Thing &t = src->things[i];
-        const size_t base = offsetof(GameState, things) + (size_t)i * sizeof(Thing);
-        put(base + offsetof(Thing, next), ptr((int32_t)t.next));
+        const size_t base = offsetof(GameStateImage, things) + (size_t)i * sizeof(ThingImage);
+        put(base + offsetof(ThingImage, next), ptr((int32_t)t.next));
         if (i != 0 && t.cls == 0) {          // a free slot: whatever the port left there
-            put(base + offsetof(Thing, desc), t.desc ? s_bases.move_desc + t.desc * (uint32_t)sizeof(MoveDesc) : 0u);
-            put(base + offsetof(Thing, player), t.player ? state_base + t.player : 0u);
+            put(base + offsetof(ThingImage, desc), t.desc ? s_bases.move_desc + t.desc * (uint32_t)sizeof(MoveDesc) : 0u);
+            put(base + offsetof(ThingImage, player), t.player ? state_base + t.player : 0u);
             continue;
         }
-        put(base + offsetof(Thing, desc), s_bases.move_desc + t.desc * (uint32_t)sizeof(MoveDesc));
-        put(base + offsetof(Thing, player), t.player ? state_base + t.player : s_bases.dummy_block);
+        put(base + offsetof(ThingImage, desc), s_bases.move_desc + t.desc * (uint32_t)sizeof(MoveDesc));
+        put(base + offsetof(ThingImage, player), t.player ? state_base + t.player : s_bases.dummy_block);
     }
 }
 
@@ -355,9 +360,14 @@ bool demo_save_state(int number) {
         if (!f) return false;
         const uint32_t slots = (uint32_t)thing_pool_slots();
         const size_t n = slots - (uint32_t)MC_THING_SLOTS;
-        bool ok = std::fwrite(g_state, 1, sizeof(GameState), f) == sizeof(GameState) &&
-                  std::fwrite(&slots, 1, 4, f) == 4 &&
-                  (n == 0 || std::fwrite(thing_at(MC_THING_SLOTS), sizeof(Thing), n, f) == n);
+        static GameStateImage img;
+        state_to_image(*g_state, &img);
+        bool ok = std::fwrite(&img, 1, sizeof img, f) == sizeof img && std::fwrite(&slots, 1, 4, f) == 4;
+        for (size_t i = 0; ok && i < n; i++) {
+            ThingImage ti;
+            thing_to_image(*thing_at((unsigned)(MC_THING_SLOTS + i)), &ti);
+            ok = std::fwrite(&ti, 1, sizeof ti, f) == sizeof ti;
+        }
         if (ok && s_version == 3) {                             // round 10: the mode block + globals (demo.h)
             const std::vector<uint8_t> tail = save_v3_tail();
             ok = std::fwrite(tail.data(), 1, tail.size(), f) == tail.size();
@@ -366,7 +376,7 @@ bool demo_save_state(int number) {
         return ok;
     }
     movie_path_in(s_rec_dir, path, sizeof path, "%s/gam%05d.dat", (int16_t)number);
-    static uint8_t image[sizeof(GameState)];
+    static uint8_t image[MC_STATE_IMAGE_SIZE];
     demo_state_to_original(g_state, image);
     std::FILE *f = std::fopen(path, "wb");
     if (!f) return false;

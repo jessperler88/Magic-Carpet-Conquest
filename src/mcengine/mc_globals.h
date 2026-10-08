@@ -8,12 +8,14 @@
 extern GameState *g_state;          // 0xadf6c
 extern Config    *g_cfg;            // 0xadf74
 
-// Terrain maps, index = (y_cell << 8) | x_cell (see mc_cell()).
-extern uint8_t  g_map_type[MC_MAP_CELLS];     // 0xcdfb0 texture index per cell
-extern uint8_t  g_map_height[MC_MAP_CELLS];   // 0xddfb0 world height = byte * 0x20
-extern uint8_t  g_map_light[MC_MAP_CELLS];    // 0xedfb0
-extern uint8_t  g_map_flags[MC_MAP_CELLS];    // 0xfdfb0 bits0-2 class, bit3 water anim, bits4-6 rotation, bit7 built-on
-extern uint16_t g_cell_things[MC_MAP_CELLS];  // 0x10dfb0 first Thing per cell; also the generator's 16-bit scratch
+// Terrain maps, index = (y_cell << 8) | x_cell (see mc_cell(); world.h world_cell() for any world size).
+// Round 11: pointers to g_world.cells entries - the original's static arrays for the 256-cell world, a heap
+// block for a wider one (world.h world_set_size).
+extern uint8_t  *g_map_type;     // 0xcdfb0 texture index per cell
+extern uint8_t  *g_map_height;   // 0xddfb0 world height = byte * 0x20
+extern uint8_t  *g_map_light;    // 0xedfb0
+extern uint8_t  *g_map_flags;    // 0xfdfb0 bits0-2 class, bit3 water anim, bits4-6 rotation, bit7 built-on
+extern uint16_t *g_cell_things;  // 0x10dfb0 first Thing per cell; also the generator's 16-bit scratch
 
 // Work buffer (DAT_000adf68, 64000+ bytes): vertex grid (840 x 44), sprite column table (+0x9060),
 // per-row clip triples (+0xb360), roll index list (+0xe7e0). Also the front end's swap buffer.

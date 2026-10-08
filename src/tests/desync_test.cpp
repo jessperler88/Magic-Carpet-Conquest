@@ -355,7 +355,9 @@ static uint32_t legacy_checksum() {
         h = legacy_fnv(h, thing_pool_ext_active_stack(), (size_t)ext * sizeof(int32_t));
     }
     for (int i = 0; i < MC_THING_SLOTS + ext; i++) {
-        Thing t = i < MC_THING_SLOTS ? s->things[i] : *thing_at((unsigned)i);
+        // round 11: the round-9 function hashed the original's 0xa4-byte record (mc_image.h)
+        ThingImage t;
+        thing_to_image(i < MC_THING_SLOTS ? s->things[i] : *thing_at((unsigned)i), &t);
         if ((t.cls == 3 && t.type == 0) || t.cls == 0xc) t.flags &= ~1u;
         h = legacy_fnv(h, &t, sizeof t);
     }
