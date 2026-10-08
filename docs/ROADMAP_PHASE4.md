@@ -212,6 +212,9 @@ Follow-up after the user's play (same day, session3 report section 6): spell urn
 (60 % with a trigger; lone stones rare), palm / oak woods (oak = Hidden Worlds' tree, port SpriteDesc 285 / port
 sprite slot), taller peaks, Hidden Worlds' snow classification + snow tiles (render-only art overlay `world_art_apply`).
 User note: bots felt passive (few spells, template aggression, distance) - round 17.
+**Open (user, 2026-10-08), first thing next session**: burnt oaks keep the live oak sprite - `scenery_tree_s1_update`
+(scenery.cpp) maps only 0x53 / 0x54 to the burnt 0xe2 / 0xe3; add a burnt-oak descriptor + Hidden Worlds' burnt tree
+art (second port sprite in `world_art_apply`).
 
 - [x] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `world_cell_x/y`,
       `world_cx`, `world_signed` (= the original's `(int16_t)` at 256), `world_dist_sq` int64), replacing `mc_cell`,
