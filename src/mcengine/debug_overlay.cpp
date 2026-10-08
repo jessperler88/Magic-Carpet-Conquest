@@ -36,6 +36,7 @@ bool s_builtins = false;
 int s_inspect = -1;
 uint32_t s_inspect_gen = 0;
 bool s_follow = false;
+bool s_panel_hidden = false;            // the inspector panel is not drawn (inspection / follow go on)
 int s_cell_x = -1, s_cell_y = -1;
 
 bool s_pointer = false;
@@ -414,6 +415,7 @@ bool any_needs_view() {
 // ---------------------------------------------------------------------------------------------
 
 void draw_inspector(const DebugOverlayCtx &c) {
+    if (s_panel_hidden) return;
     std::vector<std::string> L;
     if (s_inspect >= 0) debug_inspect_lines(s_inspect, &L);
     if (s_cell_x >= 0) {
@@ -564,6 +566,8 @@ void debug_inspect_set(int slot) {
     s_inspect_gen = thing_slot_generation((unsigned)slot);
 }
 int debug_inspect_slot() { return s_inspect; }
+void debug_inspect_set_panel_hidden(bool hidden) { s_panel_hidden = hidden; }
+bool debug_inspect_panel_hidden() { return s_panel_hidden; }
 uint32_t debug_inspect_generation() { return s_inspect_gen; }
 bool debug_inspect_alive() {
     return s_inspect > 0 && s_inspect < thing_pool_slots() && thing_slot_generation((unsigned)s_inspect) == s_inspect_gen &&

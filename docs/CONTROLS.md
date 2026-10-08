@@ -132,6 +132,7 @@ packets, so it is recorded in movies and save states like normal input; none of 
 | Cursor mode: **left click** | Inspect the creature / object under the pointer (click on nothing closes the panel) |
 | Cursor mode: **right click** | Inspect the ground cell under the pointer |
 | **Backspace** | Close the inspector panel |
+| **Shift+Backspace** or **Keypad /** | Hide / show the inspector panel; the inspected Thing stays selected and the follow camera keeps orbiting it |
 | **Keypad 8** or **Ctrl+Home** | Follow the inspected thing with the camera: move the mouse to orbit around it, wheel to zoom (in cursor mode: right-drag orbits) |
 | **Keypad 7** / **Keypad 9** | Inspect the previous / next thing |
 | **Keypad 1 … 6** | Overlays: grid, labels, anchors, occupancy, damage, network sync |

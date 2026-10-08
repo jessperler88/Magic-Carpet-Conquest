@@ -24,7 +24,10 @@ constexpr int kOrbitPerPx = 8;          // orbit angle units (0x800 = a turn) pe
 bool s_have_ptr = false;                // the pointer in game-frame pixels (cursor mode), for drawing it
 int s_ptr_fx = 0, s_ptr_fy = 0;
 
-void inspector_close() { debug_inspect_set(-1); debug_inspect_set_cell(-1, -1); s_cell_x = s_cell_y = -1; }
+void inspector_close() {
+    debug_inspect_set(-1); debug_inspect_set_cell(-1, -1); s_cell_x = s_cell_y = -1;
+    debug_inspect_set_panel_hidden(false);
+}
 
 // The pointer in view space (render.h) of the last drawn frame.
 bool pointer_view(const mc::Platform &plat, const mc::Input &in, int *vx, int *vy) {
@@ -74,6 +77,13 @@ bool inspect_tool_key(mc::Platform &plat, int sc, uint8_t mods, bool level) {
         else if (mods == KEYMOD_SHIFT) inspector_close();
         else if (mods == KEYMOD_CTRL) debug_inspect_set_follow(!debug_inspect_follow());
         else return false;
+        return true;
+    }
+    // Shift+Backspace / keypad /: hide or show the panel, keep inspecting (and following / orbiting)
+    if ((sc == SDL_SCANCODE_BACKSPACE && mods == KEYMOD_SHIFT) || (sc == SDL_SCANCODE_KP_DIVIDE && mods == 0)) {
+        if (debug_inspect_slot() < 0 && s_cell_x < 0) return false;
+        if (g_state && g_state->players[g_state->local_player & 7].input_mode == 3) return false;
+        debug_inspect_set_panel_hidden(!debug_inspect_panel_hidden());
         return true;
     }
     if (mods != 0) return false;

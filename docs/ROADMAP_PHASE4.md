@@ -340,6 +340,22 @@ Three layers (`phase4_research_games.md` 6.3), all deterministic over the mode R
 - [ ] **Unit layer**: squad FSM (idle at lair -> move -> engage -> retreat) with a utility target picker.
 - [ ] **Avatar**: the existing `ai_wizard` flight / dodge / cast layer kept, driven by the strategic goal (fly
       to the spring, creep the elite, go home when hurt, join the push); allowed spells extended past 0x11.
+- [ ] **Avatar baseline: 1996 AI plus picks from the 1995 engine** (decided 2026-10-08; the 1995 behaviour is
+      already in the port behind `engine1995()`, see `docs/analysis/port_hidden_engine1995.md`). Keep the 1996
+      `ai_wizard` as the base (final release, covered by the most references incl. scripted human input) and
+      take, each as a `GameplayRules` flag for the mode (save states / movies / network carry it, base and
+      Hidden Worlds levels stay exact):
+      - **Speed Up that works**: 1995 `ai_approach_target` / idle / return-home leave the target speed alone
+        while Speed Up runs; 1996 resets it to 0x50 at once, wasting the cast (a 1996 bug).
+      - **Hover momentum** (optional, judge in bot-vs-bot tests): the 1995 hover tails of modes 1/3/6/7/8 do
+        not zero the target speed.
+      - **Spell 22 pickup fix**: 1995 binds class 12 record 68 to the phase-2 pickup handler; in 1996 that
+        pickup can never be collected.
+      - **Aimed Fire Wall AI** together with the homing Fire Wall spell (round 18): 1995 `ai_spell_ready` /
+        `ai_cast_spell` aimed cast, cooldown 4, the rung after meteor in both attack-spell choices,
+        countering and heavy-threat scoring of projectile 0x10. They only make sense together.
+      - Not taken: the 1995 "both fire buttons, no movement = own castle loses a level" rule (a debug
+        leftover, removed in 1996), the looser 1995 castle-upgrade test (1996's extra checks are better).
 - [ ] **Personalities** (8 named wizards, MC2's roster names are a good start: Nyphur, Rahn, Jark, Belix,
       Elyssia, Yragore, Prish): favourite monster, aggression, expansion appetite, raid cadence, chat lines.
       Difficulty = gather multiplier + decision interval, hidden in fiction.
@@ -365,6 +381,10 @@ extension-table handler plus a `kSpells`-style row; spell Things are class 12 wi
       **Fire / Lightning Tower** (round 14 building), **Summon Army** (bees / cymmerians / wyverns once MC2
       creatures load, round 20), **Alliance** (one species in a radius fights for you), **Magic Mine**, **Fool's
       Mana**, **Blizzard** (slow slot on units), **Mass heal / Regeneration aura**.
+- [ ] **Homing Fire Wall** from Hidden Worlds (already ported behind `world_hidden()`,
+      `docs/analysis/hidden_worlds_re.md` section 4): a homing shot (MoveDesc index 2, cone 0x100) leaving an
+      explosion trail, ending in a small meteor-style shock ring (`% 7`). Offer it as the mode's Fire Wall or as
+      an extra spell, with the 1995 aimed Fire Wall AI from round 17.
 - [ ] Spell levels 1-3 applied by the round-13 side struct; loadout of 6 at match start; discovery drops biased to
       the loadout; the book shows locked / level.
 - Gate: one scenario per spell (cast, assert effect Things / damage), AI allowed-spell table extended,

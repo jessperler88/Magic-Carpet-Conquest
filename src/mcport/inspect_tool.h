@@ -11,6 +11,7 @@
 //   (cursor mode) right drag        orbit the follow camera around the followed Thing; wheel = zoom
 //   following, cursor mode off      the mouse orbits the camera around the Thing, wheel = zoom (steering frozen)
 //   Backspace, Shift+Home, keypad . inspector off (Thing and cell); Backspace not while typing a chat line
+//   Shift+Backspace, keypad /       hide / show the panel only (inspection, follow and orbit go on)
 //   Ctrl+Home, keypad 8             follow the inspected Thing with the debug camera on / off
 //   keypad 7 / keypad 9             inspect the previous / next live Thing slot
 //   keypad 1..6                     overlays grid / labels / anchors / occupancy / damage / net on / off

@@ -61,6 +61,9 @@ void debug_inspect_set_follow(bool on);
 // Orbit the follow camera: yaw / elevation steps (0x800 = a full turn), zoom steps (+ = closer). Render-only.
 void debug_inspect_orbit(int dyaw, int delev, int zoom_steps);
 bool debug_inspect_follow();
+// Hide / show the inspector panel; the inspected Thing, the cell pick and the follow camera stay as they are.
+void debug_inspect_set_panel_hidden(bool hidden);
+bool debug_inspect_panel_hidden();
 // The camera D's debug camera uses in follow mode: behind and above the inspected Thing, looking along
 // its yaw. False when nothing is inspected / the slot was reused. Pure function of GameState.
 bool debug_inspect_follow_camera(Camera *cam);

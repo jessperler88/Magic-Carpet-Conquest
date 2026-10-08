@@ -1285,7 +1285,9 @@ int main(int argc, char **argv) {
             }
         }
         if (steps == 8) { next_cam = now; cam_prev = cam; s_dcam_prev = s_dcam; }
-        if (dcam_input && (in.mouse_dx || in.mouse_dy)) {   // relative mouse: look around (immediate, not lerped)
+        // relative mouse: look around (immediate, not lerped). Not while the inspector owns the mouse (cursor
+        // mode: the pointer picks Things; following: the mouse orbits the followed Thing).
+        if (dcam_input && !cursor_mouse && (in.mouse_dx || in.mouse_dy)) {
             for (Camera *c : {&s_dcam, &s_dcam_prev}) {
                 c->yaw = (c->yaw + in.mouse_dx * 2) & MC_ANGLE_MASK;
                 c->pitch -= in.mouse_dy;
