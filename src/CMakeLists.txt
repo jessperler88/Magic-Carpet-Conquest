@@ -5,8 +5,12 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(MC_WARN_NARROWING "Diagnostic build: report C4244 narrowing conversions (round 11 world sweep)" OFF)
 if(MSVC)
-  add_compile_options(/W4 /utf-8 /wd4244 /wd4245 /wd4267)
+  add_compile_options(/W4 /utf-8 /wd4245 /wd4267)
+  if(NOT MC_WARN_NARROWING)
+    add_compile_options(/wd4244)
+  endif()
   # Incremental linking produced executables that crashed before main (game_test, effects_test, round 8);
   # a full link of the same objects ran fine.
   add_link_options(/INCREMENTAL:NO)

@@ -1,4 +1,5 @@
 // Data sets (base / Hidden Worlds): see world_set.h.
+#define _CRT_SECURE_NO_WARNINGS
 #include "world_set.h"
 #include "../mcdata/mcfile.h"
 #include <cstdio>

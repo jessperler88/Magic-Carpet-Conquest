@@ -6,6 +6,7 @@
 //     set-1 files (castle footprints / sprite extents reloaded), and loading a base level afterwards gives
 //     the same state as before the switch.
 // argv[1] = game dir.
+#define _CRT_SECURE_NO_WARNINGS
 #include "world_set.h"
 #include "game.h"
 #include "sim.h"

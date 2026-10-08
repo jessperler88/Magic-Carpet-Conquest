@@ -45,6 +45,9 @@ constexpr int MC_WORLD_MAX = 4096;
 // coordinates (call it before a level is generated or loaded).
 bool world_set_size(int n);
 inline bool world_wide() { return g_world.size != 256; }
+// Test / prototype helper (thing.cpp): the loaded 256-cell level repeated (n/256)^2 times as an n-cell world.
+// Things keep their coordinates (they stay in the first copy) and are relinked into the new cell lists.
+bool world_widen_tiled(int n);
 
 // ---- cells ---------------------------------------------------------------------------------------------
 inline int world_wrap_cell(int c) { return (int)((uint32_t)c & g_world.cell_mask); }

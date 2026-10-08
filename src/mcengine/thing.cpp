@@ -271,6 +271,33 @@ void thing_link_cell(Thing *t, const Pos *pos) {
     t->flags |= 4;
 }
 
+bool world_widen_tiled(int n) {
+    if (g_world.size != 256 || n <= 256) return n == g_world.size;
+    std::vector<uint8_t> maps(4 * (size_t)MC_MAP_CELLS);
+    std::memcpy(maps.data(), g_map_type, MC_MAP_CELLS);
+    std::memcpy(maps.data() + MC_MAP_CELLS, g_map_height, MC_MAP_CELLS);
+    std::memcpy(maps.data() + 2 * MC_MAP_CELLS, g_map_light, MC_MAP_CELLS);
+    std::memcpy(maps.data() + 3 * MC_MAP_CELLS, g_map_flags, MC_MAP_CELLS);
+    if (!world_set_size(n)) return false;
+    for (int cy = 0; cy < n; cy++)
+        for (int cx = 0; cx < n; cx++) {
+            const uint32_t c = world_cell(cx, cy), s = (uint32_t)(((cy & 0xff) << 8) | (cx & 0xff));
+            g_map_type[c] = maps[s];
+            g_map_height[c] = maps[MC_MAP_CELLS + s];
+            g_map_light[c] = maps[2 * MC_MAP_CELLS + s];
+            g_map_flags[c] = maps[3 * MC_MAP_CELLS + s];
+        }
+    // the cell lists from scratch, in slot order (each list's order is the reverse of the link order)
+    for (int i = 1; i < thing_pool_slots(); i++) {
+        Thing *t = thing_at((unsigned)i);
+        if (!(t->flags & 4)) continue;
+        t->flags &= ~4u;
+        const Pos p = *thing_pos(t);
+        thing_link_cell(t, &p);
+    }
+    return true;
+}
+
 // thing_unlink_cell_3e330
 void thing_unlink_cell(Thing *t) {
     if (!(t->flags & 4)) return;
