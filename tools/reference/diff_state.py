@@ -350,8 +350,8 @@ class Differ:
         self.walk("Thing", a, b, off, path, hashed)
         for d in self.diffs[start:]:
             d.note = note
-            # flags bit 0 of the local flyer / the spells is per instance (net.cpp)
-            if d.path.endswith(".flags") and ((cls_a == 3 and type_a == 0) or cls_a == 12):
+            # flags bit 0 of the local flyer / the spells is per instance (net.cpp); a free slot keeps it
+            if d.path.endswith(".flags") and ((cls_a == 3 and type_a == 0) or cls_a == 12 or cls_a == 0):
                 fa = struct.unpack_from("<I", a, off + self.toff("flags"))[0]
                 fb = struct.unpack_from("<I", b, off + self.toff("flags"))[0]
                 if (fa ^ fb) == 1:
@@ -367,7 +367,7 @@ def index_suffix(dims, i):
 
 
 # What net_state_checksum hashes (net.cpp state_checksum).
-LOCAL_P = ("start_tick", "castle_hit_flash", "hit_flash", "damage_flash", "spell_flash")
+LOCAL_P = ("start_tick", "castle_hit_flash", "hit_flash", "damage_flash", "spell_flash", "combat_music")
 HASHED_HEAD = ("win_timer", "status", "active", "index", "is_computer", "thing")
 
 

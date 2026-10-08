@@ -358,7 +358,8 @@ static uint32_t legacy_checksum() {
         // round 11: the round-9 function hashed the original's 0xa4-byte record (mc_image.h)
         ThingImage t;
         thing_to_image(i < MC_THING_SLOTS ? s->things[i] : *thing_at((unsigned)i), &t);
-        if ((t.cls == 3 && t.type == 0) || t.cls == 0xc) t.flags &= ~1u;
+        // round 11 session 3: free slots keep the local-instance bit of the spell / flyer they were (net.cpp)
+        if ((t.cls == 3 && t.type == 0) || t.cls == 0xc || t.cls == 0) t.flags &= ~1u;
         h = legacy_fnv(h, &t, sizeof t);
     }
     for (int p = 0; p < 8; p++) {
@@ -376,6 +377,7 @@ static uint32_t legacy_checksum() {
         P[offsetof(PlayerBlock, hit_flash)] = 0;
         P[offsetof(PlayerBlock, damage_flash)] = 0;
         std::memset(P + offsetof(PlayerBlock, spell_flash), 0, sizeof r.blk.spell_flash);
+        std::memset(P + offsetof(PlayerBlock, combat_music), 0, sizeof r.blk.combat_music);   // round 11 session 3
         h = legacy_fnv(h, P, sizeof P);
     }
     h = legacy_fnv(h, g_map_type, MC_MAP_CELLS);

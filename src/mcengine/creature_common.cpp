@@ -6,6 +6,8 @@
 // "index != 0" and "(ptr - things) / 0xa4" becomes thing_index().
 #include "creatures.h"
 #include "mc_math.h"
+#include "mode.h"
+#include <cstdint>
 
 namespace {
 
@@ -354,13 +356,14 @@ void creature_follow_leader(Thing *t, int base) {
         for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
             Thing *o = thing_at(i);
             if (o->owner == t->owner) continue;
-            // (operands sign-extended before the subtraction, no wrap: the original's quirk; with N > 256
-            // world_signed centres the coordinates on 0 the same way, so the test misses across the
-            // half-world line exactly as the original misses across x = 0x8000)
-            int dx = world_signed(t->x) - world_signed(o->x);
+            // (operands sign-extended before the subtraction, no wrap: the original's quirk - the test misses
+            // across x = 0x8000. Round 11 session 3: a wider world takes the torus difference instead, so no
+            // invisible line runs through the middle of a Conquest world)
+            const bool wide = world_wide();
+            int dx = wide ? world_signed(t->x - o->x) : world_signed(t->x) - world_signed(o->x);
             if (dx < 0) dx = -dx;
             if (dx >= 0x100) continue;
-            int dy = world_signed(t->y) - world_signed(o->y);
+            int dy = wide ? world_signed(t->y - o->y) : world_signed(t->y) - world_signed(o->y);
             if (dy < 0) dy = -dy;
             if (dy >= 0x100) continue;
             t->target_yaw = (uint16_t)pos_angle_to(thing_pos(o), thing_pos(t));
@@ -595,14 +598,33 @@ int creature_proximity_wake_timer(Thing *t) {
         t->timer_b--;
         return 0;
     }
-    const Thing *local = thing_at(g_state->players[g_state->local_player].thing);
-    // pos_dist_sq_xy_3e970(thing pos, local pos): eax = dx^2 + dy^2 and edx is left holding dy^2
-    // round 11: torus differences / int64 distance (world.h; the original's int32 sum with 256 cells,
-    // which wraps negative - "near" - at exactly 128 cells on both axes). The wake-near-any-wizard rule
-    // of a wide world is session 3.
-    int32_t dy = world_signed(local->y - t->y);
-    int32_t dx = world_signed(local->x - t->x);
-    int64_t d2 = world_dist_sq(dx, dy);
+    int32_t dy;
+    int64_t d2;
+    if (mode_active()) {
+        // port (Phase 4 round 11, B6): a mode run wakes a creature near ANY wizard - human or computer, every
+        // player record in play - so lairs far from the local player live in a big world and a network mode run
+        // has the same rule on every peer (the original tests the local player only and skips the whole wake
+        // tick in a network game: everything stays awake there). The nearest wizard gives cast_ticks.
+        dy = 0;
+        d2 = INT64_MAX;
+        for (int p = 0; p < 8 && p < (int)(uint16_t)g_state->player_count; p++) {
+            const PlayerRec &rec = g_state->players[p];
+            if (rec.thing == 0) continue;
+            const Thing *w = thing_at(rec.thing);
+            if (w->cls != 3) continue;
+            const int32_t wy = world_signed(w->y - t->y);
+            const int64_t wd = world_dist_sq(world_signed(w->x - t->x), wy);
+            if (wd < d2) { d2 = wd; dy = wy; }
+        }
+    } else {
+        const Thing *local = thing_at(g_state->players[g_state->local_player].thing);
+        // pos_dist_sq_xy_3e970(thing pos, local pos): eax = dx^2 + dy^2 and edx is left holding dy^2
+        // round 11: torus differences / int64 distance (world.h; the original's int32 sum with 256 cells,
+        // which wraps negative - "near" - at exactly 128 cells on both axes).
+        dy = world_signed(local->y - t->y);
+        const int32_t dx = world_signed(local->x - t->x);
+        d2 = world_dist_sq(dx, dy);
+    }
     if (d2 < 0x2400000) {
         // "push edx; call math_isqrt_4cd7a": the root of dy^2, not of the distance (dy^2 <= 2^30 here
         // with 256 cells; below 0x2400000 otherwise)

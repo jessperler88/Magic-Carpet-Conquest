@@ -10,6 +10,7 @@
 #include "net.h"
 #include "world_set.h"
 #include "world.h"
+#include "mode.h"
 #include "tick_profile.h"
 #include <cstdio>
 #include <cstring>
@@ -272,6 +273,10 @@ void players_init_records() {
         cmd->cmd = 1;                                   // "join": the first tick spawns the player
         rec->index = (uint16_t)p;
         if (!(g_cfg->flags & 0x10) && p != g_state->local_player) rec->is_computer = 1;
+        // port (round 11): a network mode run has computer wizards too - the records after the humans (mode.h
+        // ModeParams.humans = the session's players, the same on every peer)
+        const bool net_bot = (g_cfg->flags & 0x10) && mode_active() && p >= (int)g_mode.params.humans;
+        if (net_bot) rec->is_computer = 1;
         rec->log_count = 0x20;
         rec->view_entry = (uint16_t)(rec->log_count - 1);
         rec->log_template.zoom = 0x80;                  // rec+0x248
@@ -281,7 +286,7 @@ void players_init_records() {
         P->slot_left = 0xff;
         P->slot_right = 0xff;
         // Level player block: +0x10[24] spells the player starts with, +0x74[24] spells allowed.
-        int q = (g_cfg->flags & 0x10) ? 0 : p;
+        int q = (g_cfg->flags & 0x10) && !net_bot ? 0 : p;
         const uint8_t *blk_q = g_state->level.player_block[q];
         const uint8_t *blk_p = g_state->level.player_block[p];
         int slot = 0;

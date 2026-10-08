@@ -465,7 +465,8 @@ void thing_update_all() {
         }
     }
 
-    if (!(g_cfg->flags & 0x10) && g_hook_creature_wake_tick) g_hook_creature_wake_tick();
+    // port (round 11 B6): a mode run keeps the wake tick in a network game too (near any wizard, creature_common.cpp)
+    if ((!(g_cfg->flags & 0x10) || mode_active()) && g_hook_creature_wake_tick) g_hook_creature_wake_tick();
     if (g_hook_ai_record_threat) g_hook_ai_record_threat();
     if (g_hook_mana_totals_update) {
         int lp = g_state->local_player;
@@ -773,7 +774,10 @@ int pos_pitch_from_dz(int z0, int z1, int dist) {
 static inline int iabs(int v) { return v < 0 ? -v : v; }
 
 // pos_dist_manhattan_3e730 (operands sign-extended before the subtraction: no 16-bit wrap)
+// Round 11 session 3: a world wider than 256 cells takes the torus differences (no line at the half-world).
 int pos_dist_manhattan(const Pos *a, const Pos *b) {
+    if (world_wide())
+        return iabs(world_signed(a->x - b->x)) + iabs(world_signed(a->y - b->y)) + iabs(a->z - b->z);
     return iabs(world_signed(a->x) - world_signed(b->x)) + iabs(world_signed(a->y) - world_signed(b->y)) + iabs(a->z - b->z);
 }
 

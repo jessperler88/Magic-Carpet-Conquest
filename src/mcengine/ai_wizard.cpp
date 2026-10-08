@@ -11,6 +11,7 @@
 #include "player.h"
 #include "level_features.h"
 #include "world_set.h"
+#include "mode.h"
 #include "gen/ai_wizard_tables.h"
 #include <cstring>
 
@@ -620,20 +621,38 @@ int ai_find_castle_site(Thing *t) {
     // the start quadrant of the upper half is -2 / -1 / 0 as in the original); the corner is
     // (q & 3) * quadrant, the "centre" cell (q & 3) * (size / 4) + size / 8 - 1 (0x1f with 256 cells).
     // The 0x3000 Chebyshev clearance is a game range and stays.
-    const int32_t quad = g_world.units / 4;
-    const int quad_cells = g_world.size / 4, centre_cell = g_world.size / 8 - 1;
+    int32_t quad = g_world.units / 4;
+    int quad_cells = g_world.size / 4, centre_cell = g_world.size / 8 - 1, qmask = 3;
+    if (mode_active() && world_wide()) {
+        // port (round 11 session 3): in a world wider than 256 cells a quarter of the world is 128..1024 cells, so
+        // the first site could lie hundreds of cells from the wizard. A mode run tries the wizard's own seat first
+        // (worldgen flattens a plateau there), then the original's 64-cell quadrants, 4 x 4 of them from the
+        // wizard's own on (not wrapped to the world's first four).
+        const Pos seat = world_start_pos(P->player_no & 7);
+        scratch->x = seat.x;
+        scratch->y = seat.y;
+        Thing *c = player_find_nearest_by_type(scratch, 2);
+        if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
+            t->home = *thing_pos(scratch);
+            return 1;
+        }
+        quad = 0x4000;
+        quad_cells = 64;
+        centre_cell = 0x1f;
+        qmask = -1;
+    }
     int qx0 = world_signed(t->x) / quad, qy0 = world_signed(t->y) / quad;
     for (int qy = qy0; (int16_t)qy < (int16_t)(qy0 + 4); qy++) {
         for (int qx = qx0; (int16_t)qx < (int16_t)(qx0 + 4); qx++) {
-            scratch->x = (qx & 3) * quad;                           // quadrant corner
-            scratch->y = (qy & 3) * quad;
+            scratch->x = (qx & qmask) * quad;                       // quadrant corner
+            scratch->y = (qy & qmask) * quad;
             Thing *c = player_find_nearest_by_type(scratch, 2);
             if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
                 t->home = *thing_pos(scratch);
                 return 1;
             }
-            scratch->x = ((qx & 3) * quad_cells + centre_cell) << 8;   // quadrant centre
-            scratch->y = ((qy & 3) * quad_cells + centre_cell) << 8;
+            scratch->x = ((qx & qmask) * quad_cells + centre_cell) * 0x100;    // quadrant centre
+            scratch->y = ((qy & qmask) * quad_cells + centre_cell) * 0x100;
             c = player_find_nearest_by_type(scratch, 2);
             if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
                 t->home = *thing_pos(scratch);

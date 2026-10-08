@@ -9,6 +9,7 @@
 #include "ai_wizard.h"
 #include "terrain_paint.h"
 #include "worldgen.h"
+#include "net.h"
 #include "gen/player_tables.h"
 #include "mcfile.h"
 #include <cstdio>
@@ -182,6 +183,23 @@ void mode_stop_run() {
 }
 
 bool mode_run_active() { return s_running && mode_active(); }
+
+bool mode_start_net_run(const char *game_dir, uint32_t mode, const ModeParams &params, bool *differs) {
+    if (differs) *differs = false;
+    if (!net_joined()) return false;
+    ModeParams mine = params;
+    mine.humans = (uint32_t)net_player_count();
+    if (mine.humans + mine.bots > 8) mine.bots = mine.humans < 8 ? 8 - mine.humans : 0;
+    // this peer's run first, so its rules (the pool of this world) are what it proposes
+    if (!mode_start_run(game_dir, mode, mine)) return false;
+    const NetGameRules agreed = net_agree_rules(net_local_rules(), differs);
+    mode_stop_run();                                 // releases the forced rules: the host's are applied next
+    if (agreed.mode == GAME_MODE_ORIGINAL || agreed.mode >= GAME_MODE_COUNT) return false;
+    net_apply_rules(agreed);
+    g_cfg->flags |= 0x10;
+    if (!mode_start_run(game_dir, agreed.mode, agreed.mode_params)) { net_release_rules(); return false; }
+    return true;
+}
 
 bool mode_start_run_for_state(const char *game_dir, const char *state_path) {
     mc_blob f;

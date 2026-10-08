@@ -7,6 +7,7 @@
 // Placeholder behaviour until then: no network - net_init fails, joins fail, exchanges do nothing.
 #include <cstdint>
 #include <cstddef>
+#include "mode.h"
 
 // net_init_4ee70: detect the transport and allocate the buffers. 1 = network present (the original
 // sets DAT_0009e3c8 = 1, which the front end reads as g_fe_network), -1 = no network.
@@ -131,13 +132,17 @@ void net_exchange_block(void *base, int size);
 // net_apply_rules forces the result over the local settings (thing_pool_force_slots,
 // gameplay_force_rules) until net_release_rules (game_after_frontend, when a level starts outside a
 // network game, and net_shutdown).
+// Round 11 session 3: a mode run's ModeParams (seed, world size, bots, WorldParams...) travel with the rules
+// until round 12's lobby has its own setup exchange: a peer starts the run with the host's (mcport rts --net,
+// world_net_test). humans = the session's player count, set by the host.
 struct NetGameRules {
     uint32_t thing_slots;           // thing_pool_wanted_slots()
     uint32_t possession_range_pct;  // GameplayRules
     uint32_t mode;                  // GameplayRules.mode (round 10; mode.h GAME_MODE_*, 0 = the original)
     uint32_t reserved;
+    ModeParams mode_params;         // g_mode.params while a mode is active, else all default
 };
-static_assert(sizeof(NetGameRules) == 16);
+static_assert(sizeof(NetGameRules) == 16 + sizeof(ModeParams));
 NetGameRules net_local_rules();                                 // this peer's settings
 NetGameRules net_agree_rules(const NetGameRules &mine, bool *differs);
 void net_apply_rules(const NetGameRules &rules);
@@ -183,9 +188,10 @@ NetSyncStats net_sync_stats();
 // per-instance values there: Config, GameState.local_player, PlayerRec tick / messages / camera log /
 // name / input mode, the level track (music availability), the command packets, PlayerBlock.start_tick
 // (real time), the HUD flash counters PlayerBlock +0x187..+0x189 and spell_flash[] (hud_tick_state
-// counts them down for the local player only), and Thing.flags bit 0 of the human flyers (class 3 type
+// counts them down for the local player only), PlayerBlock.combat_music (+0x2e: only the local player's
+// flyer counts it down; round 11), and Thing.flags bit 0 of the human flyers (class 3 type
 // 0: "this is the local player", player_spawn_3f360) and of the spells (class 12: "the local player
-// owns it", spell pickup).
+// owns it", spell pickup) - also of free slots (class 0), which keep it after the free (round 11).
 uint32_t net_state_checksum();
 // The checksum the side channel uses (null = net_state_checksum); tests give each simulated peer its own.
 void net_sync_set_checksum(uint32_t (*fn)());

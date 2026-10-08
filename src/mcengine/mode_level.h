@@ -43,6 +43,13 @@ bool mode_start_run(const char *game_dir, uint32_t mode, const ModeParams &param
 void mode_stop_run();
 bool mode_run_active();                 // between mode_start_run and mode_stop_run
 
+// A mode run in a joined network session (round 11 session 3; round 12's lobby replaces the call site): every peer
+// calls it with its own params (humans := the session's player count, bots trimmed to 8 records), the peers agree
+// on the host's NetGameRules incl. its ModeParams (net.h), which are applied, Config.flags gets 0x10 and the run is
+// started with the host's params. Records 0..humans-1 are the session's players, the rest computer wizards
+// (players_init_records). Then load MODE_LEVEL_INDEX as usual. *differs: some peer proposed other rules / params.
+bool mode_start_net_run(const char *game_dir, uint32_t mode, const ModeParams &params, bool *differs);
+
 // A savestate written during a mode run (its MODE chunk) starts that run again so the state can be loaded:
 // mcport's load_state_slot calls this before game_level_begin(header.level) when header.level is
 // MODE_LEVEL_INDEX. Reads `path` (savegame.h layout: 96-byte header, then tag / length chunks). Returns false

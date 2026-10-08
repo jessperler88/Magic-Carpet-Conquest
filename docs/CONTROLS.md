@@ -104,7 +104,7 @@ click, **B** = back / close. Bindings, dead zones and sensitivity are in the `[p
 ## Free-fly viewer
 
 `mcport.exe "<game folder>" 38` flies a camera over level 38 without playing: **W/S/A/D** move, **Q/E** turn,
-**R/F** up / down, **↑/↓** look up / down, **Z/X** roll, **+/−** zoom, hold **Shift** to go faster, hold the
+**R/F** up / down, **↑/↓** look up / down, **Z/X** roll, **+/−** zoom, hold **Shift** to go faster (**Ctrl** x4 on top, for the big Conquest worlds), hold the
 **right mouse button** to look around, **L / K** next / previous level, **Home** back to the start.
 `mcport.exe "<game folder>" demo` plays the game's recorded movie (**Tab** free camera, **Space** pause,
 **[ / ]** slower / faster).

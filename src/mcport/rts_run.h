@@ -9,6 +9,9 @@
 //   --map M           template level 50..69 (default: chosen from the seed)
 //   --reseed          re-seed the template's terrain generator from the seed (default: the map's own terrain)
 //   --debug / --no-debug   debug commands (packets 0x40.., debug_cmd.h) accepted (default on)
+//   --net N           a network run of N humans (2..8) without the lobby (round 11 session 3): needs MC_NET=1 or
+//                     MC_NET_HOST=<name server>; every instance joins the session "MCRTS" and plays the host's
+//                     (player 0's) options; records N.. are the bots. MC_NET_SYNC=n compares the state every n ticks
 //   --ticks N         quit after N simulation ticks (= MC_QUIT_AFTER_TICKS; main.cpp reads rts_quit_after_ticks)
 //   --dump-every N    write dump_<tick>.json every N ticks (= MC_DUMP_EVERY)
 //   --dump-dir D      where the dumps go (= MC_DUMP_DIR; default the current directory)
@@ -22,6 +25,7 @@
 // size 256, bots 3, one human, debug commands on. Reads the MC_DUMP_* environment first (options override).
 bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::string *err);
 long rts_quit_after_ticks();                // --ticks N (0 = not given)
+int  rts_net_players();                     // --net N (0 = offline)
 
 // Starts the run (mode_start_run + game_level_begin(MODE_LEVEL_INDEX)). False when the level could not load.
 bool rts_begin(const char *game_dir, const ModeParams &params);

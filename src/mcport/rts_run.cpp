@@ -6,6 +6,8 @@
 #include "worldgen.h"
 #include <algorithm>
 #include "game.h"
+#include "net.h"
+#include "mc_globals.h"
 #include "mclog.h"
 #include <cstdio>
 #include <cstdlib>
@@ -17,7 +19,8 @@ long        s_dump_every = 0;
 std::string s_dump_dir;
 bool        s_dump_final = false;
 long        s_quit_after = 0;
-long        s_last_tick = -1;       // the last ticks_run rts_after_tick saw (the final dump's number)
+int         s_net_players = 0;      // --net N: a network run of N humans (0 = offline)
+long        s_last_tick = -1;      // the last ticks_run rts_after_tick saw (the final dump's number)
 long        s_last_dump = -1;       // ticks_run of the last dump written (no duplicate final dump)
 std::string (*s_extra)() = nullptr;
 
@@ -87,6 +90,7 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
     p.flags = MODE_PARAM_DEBUG;
     dump_configure_from_env();
     s_quit_after = 0;
+    s_net_players = 0;
     for (int i = first; i < argc; i++) {
         const char *a = argv[i];
         auto value = [&](uint32_t *dst) {
@@ -140,6 +144,11 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
         else if (!std::strcmp(a, "--debug")) p.flags |= MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--no-debug")) p.flags &= ~MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--ticks")) { if (!value(&v)) return false; s_quit_after = (long)v; }
+        else if (!std::strcmp(a, "--net")) {
+            if (!value(&v)) return false;
+            if (v < 2 || v > 8) { *err = "--net takes the number of human players 2..8"; return false; }
+            s_net_players = (int)v;
+        }
         else if (!std::strcmp(a, "--dump-every")) { if (!value(&v)) return false; s_dump_every = (long)v; }
         else if (!std::strcmp(a, "--dump-final")) s_dump_final = true;
         else if (!std::strcmp(a, "--dump-dir")) {
@@ -160,16 +169,34 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
 }
 
 long rts_quit_after_ticks() { return s_quit_after; }
+int  rts_net_players() { return s_net_players; }
 
 bool rts_begin(const char *game_dir, const ModeParams &params) {
-    if (!mode_start_run(game_dir, GAME_MODE_CONQUEST, params)) return false;
+    if (s_net_players > 0) {
+        // round 11 session 3: a network run without the lobby (round 12 brings the setup screen / lobby): join the
+        // session "MCRTS" of s_net_players humans, every peer adopts the host's params (mode_start_net_run)
+        if (!net_present()) { mclog(MCLOG_ERROR, "rts --net: no network (MC_NET=1 / MC_NET_HOST=...)"); return false; }
+        mclog(MCLOG_INFO, "rts --net: waiting for %d players in session MCRTS", s_net_players);
+        const int me = net_session_join("MCRTS", s_net_players);
+        if (me < 0) { mclog(MCLOG_ERROR, "rts --net: the join failed"); return false; }
+        g_state->player_count = (int16_t)s_net_players;
+        g_state->local_player = (int16_t)me;
+        bool differs = false;
+        if (!mode_start_net_run(game_dir, GAME_MODE_CONQUEST, params, &differs)) {
+            mclog(MCLOG_ERROR, "rts --net: no agreement on the mode run");
+            return false;
+        }
+        mclog(MCLOG_INFO, "rts --net: player %d of %d (host %d)%s", me, s_net_players, net_host(),
+              differs ? ", playing with the host's settings" : "");
+    } else if (!mode_start_run(game_dir, GAME_MODE_CONQUEST, params)) return false;
+    const ModeParams mp = g_mode.params;            // the host's in a network run
     if (!game_level_begin(MODE_LEVEL_INDEX)) { mode_stop_run(); return false; }
     s_last_tick = -1;
     s_last_dump = -1;
-    mclog(MCLOG_INFO, "rts: mode %s seed %u size %u bots %u map %u%s%s", mode_name(g_mode.mode), (unsigned)params.seed,
-          (unsigned)params.world_size, (unsigned)params.bots, (unsigned)g_mode.template_level,
-          (params.flags & MODE_PARAM_RESEED) ? " (reseeded)" : "", (params.flags & MODE_PARAM_DEBUG) ? " debug" : "");
-    if (mode_params_generated(params)) {
+    mclog(MCLOG_INFO, "rts: mode %s seed %u size %u humans %u bots %u map %u%s%s", mode_name(g_mode.mode), (unsigned)mp.seed,
+          (unsigned)mp.world_size, (unsigned)mp.humans, (unsigned)mp.bots, (unsigned)g_mode.template_level,
+          (mp.flags & MODE_PARAM_RESEED) ? " (reseeded)" : "", (mp.flags & MODE_PARAM_DEBUG) ? " debug" : "");
+    if (mode_params_generated(mp)) {
         const WorldLayout &L = worldgen_last_layout();
         int count[16] = {};
         for (const WorldFeature &f : L.features) count[f.kind & 15]++;

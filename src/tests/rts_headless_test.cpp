@@ -244,7 +244,10 @@ int main(int argc, char **argv) {
     std::printf("run 1: template level %u, %d ticks in %.2f s (%.0f ticks/s, simulation only); computer wizards: "
                 "%d built a castle, %d changed AI mode, %d moved\n", (unsigned)g_mode.template_level, kTicks, secs,
                 kTicks / (secs > 0 ? secs : 1), castles, changed, moved);
-    CHECK(castles == 3 && changed == 3 && moved == 3);
+    // round 11 session 3 (B6): creatures wake near any wizard in a mode run, so a computer wizard can now be killed by
+    // the monsters near its start before it casts its castle (seed 1: one of three; without a castle it does not
+    // respawn - the original's rule until round 13's respawn)
+    CHECK(castles >= 2 && changed >= 2 && moved == 3);
     const uint32_t template_1 = g_mode.template_level;
     mode_stop_run();
     CHECK(!mode_active());

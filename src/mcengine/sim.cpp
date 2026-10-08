@@ -97,7 +97,8 @@ void level_reset_state() {
 
 // level_load_and_init_3d3b0 from "Generate map" on, with g_state->level filled.
 void level_start_from_state(int index) {
-    if (!(g_cfg->flags & 0x10)) g_state->player_count = g_state->level.player_count;
+    // port (round 11): a network mode run plays humans + bots (mode_build_level's player_count), not the session's count
+    if (!(g_cfg->flags & 0x10) || mode_active()) g_state->player_count = g_state->level.player_count;
     g_cfg->level = (uint16_t)index;
     // port (Phase 4 round 11): a mode level with a generated world is built by worldgen.cpp (world size, maps and
     // the placed THING_INIT records); the campaign and template mode levels go through terrain_build

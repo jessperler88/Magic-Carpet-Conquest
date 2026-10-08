@@ -504,11 +504,13 @@ void type15_move(Thing *t) {
     for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
         const Thing *o = thing_at(i);
         if (o->owner == t->owner) continue;
-        // (sign-extended operands, no wrap: the original's quirk, kept through world_signed)
-        int dx = world_signed(t->x) - world_signed(o->x);
+        // (sign-extended operands, no wrap: the original's quirk at 256 cells; a wider world takes the torus
+        // difference - round 11 session 3)
+        const bool wide = world_wide();
+        int dx = wide ? world_signed(t->x - o->x) : world_signed(t->x) - world_signed(o->x);
         if (dx < 0) dx = -dx;
         if (dx >= 0x100) continue;
-        int dy = world_signed(t->y) - world_signed(o->y);
+        int dy = wide ? world_signed(t->y - o->y) : world_signed(t->y) - world_signed(o->y);
         if (dy < 0) dy = -dy;
         if (dy >= 0x100) continue;
         t->target_yaw = (uint16_t)pos_angle_to(thing_pos(o), thing_pos(t));

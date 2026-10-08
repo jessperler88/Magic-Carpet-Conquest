@@ -18,8 +18,17 @@
 //  5. Interpolation (the low-16-bit prev_pos of pacing.cpp) across the seam: the follow camera of a Thing at
 //     x = N*256 - 40 coming from x = 80.
 //  6. Drawing changes no game state (net_state_checksum before / after).
+//  7. (round 11 session 3, task G, docs/analysis/port_world_refwide.md) the 1024 world at draw distance 127 and 255
+//     (kWin 256): at dd 127 the terrain frames of every case are pixel-identical across the tiles (both seams) and,
+//     at lod 0, equal to the 256 world's dd 127 frames; at dd 255 (lod 0 / 1 / 2) no map cell is drawn twice and the
+//     far ring (the last 12 cells of the radius, > 200 cells away) is drawn; the frame time of dd 127 vs 255
+//     (1280x720, one raster thread, median of 5) is printed.
+//  8. A generated 1024 world (rts --size 1024: mode_start_run + sim_load_level(MODE_LEVEL_INDEX)) drawn at dd 255
+//     above player 0's seat: no cell twice, the far ring drawn, written as w1024_gen_dd255.ppm.
 // PPMs into argv[2] / MC_WRENDER_OUT (default: current directory). Exit 0 = pass; SKIP without game data.
 #include "engine.h"
+#include "mode.h"
+#include "mode_level.h"
 #include "sim.h"
 #include "mc_globals.h"
 #include "render.h"
@@ -37,6 +46,8 @@
 #include "mcfile.h"
 #include "crash_handler.h"
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -75,6 +86,42 @@ static Img render_ext_frame(const Camera &cam, int dd, int lod) {
     Img px((size_t)EXT_W * EXT_H, 0);
     render_view_ext(FrameBuffer{px.data(), EXT_W, EXT_H}, cam);
     return px;
+}
+
+static Img render_ext_frame_wh(const Camera &cam, int dd, int lod, int w, int h) {
+    g_settings.render_extended = true;
+    g_settings.draw_distance = dd;
+    g_settings.lod = lod;
+    g_settings.fog_mode = 0;
+    Img px((size_t)w * h, 0);
+    render_view_ext(FrameBuffer{px.data(), w, h}, cam);
+    return px;
+}
+
+// The map cells one render_view_ext frame covers (g_render_ext_cell_count): drawn, drawn more than once, drawn in
+// the far ring (cell centre [R - 12, R] cells from the camera), drawn more than 200 cells away, the farthest one.
+struct Coverage { int drawn = 0, twice = 0, ring = 0, beyond200 = 0; double farthest = 0, radius = 0; };
+static Coverage coverage_frame(const Camera &c, int dd, int lod, int w, int h, Img *out = nullptr) {
+    std::vector<uint8_t> count(g_world.cells, 0);
+    g_render_ext_cell_count = count.data();
+    Img px = render_ext_frame_wh(c, dd, lod, w, h);
+    g_render_ext_cell_count = nullptr;
+    Coverage r;
+    r.radius = g_render_ext_stats.draw_radius;
+    const int32_t cx = world_wrap(c.cam_x), cy = world_wrap(c.cam_y);
+    for (uint32_t cell = 0; cell < g_world.cells; cell++) {
+        if (count[cell] == 0) continue;
+        r.drawn++;
+        if (count[cell] > 1) r.twice++;
+        const double dx = world_signed(world_cell_x(cell) * 256 + 128 - cx) / 256.0;
+        const double dy = world_signed(world_cell_y(cell) * 256 + 128 - cy) / 256.0;
+        const double d = std::sqrt(dx * dx + dy * dy);
+        if (d > r.farthest) r.farthest = d;
+        if (d > 200) r.beyond200++;
+        if (d >= r.radius - 12 && d <= r.radius) r.ring++;
+    }
+    if (out) *out = std::move(px);
+    return r;
 }
 
 static Img render_faithful_frame(const Camera &cam, bool capture = false) {
@@ -158,7 +205,7 @@ int main(int argc, char **argv) {
 
     // ---- the 256 world -------------------------------------------------------------------------------------
     Camera cams[kNumCases];
-    Img ext0[kNumCases], ext1[kNumCases], faith[kNumCases], radar[kNumCases], mapscr[kNumCases];
+    Img ext0[kNumCases], ext1[kNumCases], faith[kNumCases], radar[kNumCases], mapscr[kNumCases], ext127[kNumCases];
     for (int i = 0; i < kNumCases; i++) cams[i] = case_camera(kCases[i]);
     // with Things, camera in the middle of the level (tile (0,0) of the tiled world)
     const Img things_ext = render_ext_frame(cams[0], 100, 1);
@@ -177,6 +224,7 @@ int main(int argc, char **argv) {
         faith[i] = render_faithful_frame(cams[i]);
         radar[i] = render_radar(cams[i].cam_x, cams[i].cam_y, cams[i].yaw, false, false);
         mapscr[i] = render_radar(cams[i].cam_x, cams[i].cam_y, cams[i].yaw, true, false);
+        ext127[i] = render_ext_frame(cams[i], 127, 0);         // 7.: the 256 world's widest view, every cell a quad
     }
     write_ppm("w256_seam_x_ext.ppm", ext1[1].data(), EXT_W, EXT_H);
     // projection export across the seam (camera seam_x looking +x)
@@ -335,11 +383,136 @@ int main(int argc, char **argv) {
         }
     }
 
+    // 7. draw distance 127 and 255 in the 1024 world (kWin 256), terrain only
+    {
+        // dd 127: every case in every tile (both seams) equals tile (0,0) - lod 0 / 1 / 2 - and, at lod 0 (no coarse
+        // level, so the 256 world's radius is 127 too), the 256 world's frame
+        int frames127 = 0, bad127 = 0, bad256 = 0;
+        for (int i = 0; i < kNumCases; i++)
+            for (int lod = 0; lod <= 2; lod++) {
+                Img base;
+                for (int k = 0; k < kNumTiles; k++) {
+                    Camera c = cams[i];
+                    c.cam_x += kTiles[k][0] * 0x10000;
+                    c.cam_y += kTiles[k][1] * 0x10000;
+                    Img e = render_ext_frame(c, 127, lod);
+                    frames127++;
+                    if (k == 0) {
+                        if (lod == 0) {
+                            const int d = diff_count(e, ext127[i]);
+                            if (d) { bad256++; std::printf("FAIL: dd 127 lod 0 %s: %d pixels differ from the 256 world\n", kCases[i].name, d); }
+                        }
+                        base = std::move(e);
+                        continue;
+                    }
+                    const int d = diff_count(e, base);
+                    if (d) {
+                        bad127++;
+                        std::printf("FAIL: dd 127 lod %d %s tile (%d,%d): %d pixels differ from tile (0,0)\n", lod, kCases[i].name,
+                                    kTiles[k][0], kTiles[k][1], d);
+                    }
+                    if (i == 3 && lod == 1 && kTiles[k][0] == 3 && kTiles[k][1] == 3) write_ppm("w1024_dd127_corner_tile33.ppm", e.data(), EXT_W, EXT_H);
+                }
+            }
+        std::printf("dd 127 in the 1024 world: %d frames (%d cameras x lod 0..2 x %d tiles): %d differ across tiles, "
+                    "%d of %d lod-0 frames differ from the 256 world\n", frames127, kNumCases, kNumTiles, bad127, bad256, kNumCases);
+        g_fail += bad127 + bad256;
+
+        // dd 255: coverage per lod at the seam camera (tile (3,0), raised) and the corner camera (tile (3,3))
+        for (int which = 0; which < 2; which++) {
+            Camera c = which == 0 ? cams[1] : cams[3];
+            c.cam_x += 3 * 0x10000;
+            c.cam_y += which == 0 ? 0 : 3 * 0x10000;
+            c.cam_z += 0x800;
+            c.pitch = -8;
+            for (int lod = 0; lod <= 2; lod++) {
+                Img e;
+                const Coverage cv = coverage_frame(c, 255, lod, EXT_W, EXT_H, &e);
+                std::printf("dd 255 lod %d, %s camera: radius %.0f, %d cells drawn, %d twice, far ring %d cells, %d beyond 200 "
+                            "cells, farthest %.1f\n", lod, which == 0 ? "seam" : "corner", cv.radius, cv.drawn, cv.twice, cv.ring,
+                            cv.beyond200, cv.farthest);
+                CHECK(cv.radius >= 247 && cv.radius <= 255, "dd 255 lod %d: radius %.1f", lod, cv.radius);
+                CHECK(cv.twice == 0, "dd 255 lod %d: %d cells drawn twice", lod, cv.twice);
+                CHECK(cv.ring > 500 && cv.beyond200 > 2000, "dd 255 lod %d: far ring %d / beyond 200 %d cells", lod, cv.ring,
+                      cv.beyond200);
+                CHECK(cv.farthest <= cv.radius + 12, "dd 255 lod %d: a cell %.1f cells away", lod, cv.farthest);
+                if (which == 0 && lod == 2) write_ppm("w1024_dd255_seam.ppm", e.data(), EXT_W, EXT_H);
+            }
+        }
+
+        // frame time dd 127 vs 255 (1280x720, one raster thread so the numbers do not depend on the machine's load)
+        const int saved_threads = g_settings.render_threads;
+        g_settings.render_threads = 1;
+        Camera c = cams[0];
+        c.cam_x += 0x10000; c.cam_y += 0x10000;
+        c.cam_z += 0x800; c.pitch = -8;
+        for (int lod = 1; lod <= 2; lod++) {
+            double ms[2] = {}, build[2] = {}, raster[2] = {};
+            int tris[2] = {};
+            for (int k = 0; k < 2; k++) {
+                const int dd = k == 0 ? 127 : 255;
+                std::vector<double> t;
+                for (int rep = 0; rep < 5; rep++) {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    (void)render_ext_frame_wh(c, dd, lod, 1280, 720);
+                    t.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                }
+                std::sort(t.begin(), t.end());
+                ms[k] = t[2];
+                build[k] = g_render_ext_stats.build_ms; raster[k] = g_render_ext_stats.raster_ms;
+                tris[k] = g_render_ext_stats.triangles;
+            }
+            std::printf("frame time 1280x720 lod %d, 1 thread: dd 127 %.1f ms (build %.1f, raster %.1f, %d triangles), "
+                        "dd 255 %.1f ms (build %.1f, raster %.1f, %d triangles): x%.2f\n", lod, ms[0], build[0], raster[0], tris[0],
+                        ms[1], build[1], raster[1], tris[1], ms[0] > 0 ? ms[1] / ms[0] : 0.0);
+        }
+        g_settings.render_threads = saved_threads;
+    }
+
     std::memcpy(g_cell_things, wide_lists.data(), sizeof(uint16_t) * g_world.cells);
     const uint32_t sum1 = net_state_checksum();
     CHECK(sum0 == sum1, "drawing changed the game state (%08x -> %08x)", sum0, sum1);
     g_settings = defaults;
     world_set_size(256);
+
+    // 8. a generated 1024 world (rts --size 1024 --bots 3) at dd 255 above player 0's seat
+    {
+        mode_level_register();
+        ModeParams mp;
+        mp.seed = 1; mp.world_size = 1024; mp.bots = 3; mp.humans = 1;
+        g_cfg->flags = 0; g_cfg->paused = 0;
+        bool ok = mode_start_run(game_dir, GAME_MODE_CONQUEST, mp) && sim_load_level(MODE_LEVEL_INDEX);
+        for (int i = 0; ok && i < 8 && g_state->players[0].thing == 0; i++) game_tick_sim();     // the players spawn
+        CHECK(ok && g_world.size == 1024 && g_state->players[0].thing != 0, "generated 1024 world not started");
+        if (ok && g_world.size == 1024 && g_state->players[0].thing != 0) {
+            const Thing *w = thing_at(thing_wrap(g_state->players[0].thing));
+            Camera c{};
+            c.cam_x = w->x; c.cam_y = w->y;
+            // look towards the middle of the world
+            c.yaw = (int)((unsigned)math_atan2_w(world_signed(512 * 256 - (int32_t)w->x), world_signed(512 * 256 - (int32_t)w->y)) & 0x7ff);
+            c.cam_z = terrain_sample_height(c.cam_x, c.cam_y) + 0x3000;     // high above the seat: the far ring visible
+            c.pitch = 100; c.roll = 0; c.zoom = 0x80;                          // looking down a little
+            g_state->opt_motion_blur = 0;
+            g_render_interp = RenderInterp{};
+            const uint32_t sum_a = net_state_checksum();
+            Img e;
+            const Coverage cv = coverage_frame(c, 255, 2, 960, 600, &e);
+            write_ppm("w1024_gen_dd255.ppm", e.data(), 960, 600);
+            int colours[256] = {}, distinct = 0;
+            for (uint8_t p : e) colours[p]++;
+            for (int k = 0; k < 256; k++) distinct += colours[k] != 0;
+            std::printf("generated 1024 world (seed 1, template %u): camera at cell %d,%d yaw %d, dd 255 lod 2: radius %.0f, "
+                        "%d cells drawn, %d twice, far ring %d, beyond 200 cells %d, %d colours -> w1024_gen_dd255.ppm\n",
+                        g_mode.template_level, (int32_t)c.cam_x >> 8, (int32_t)c.cam_y >> 8, c.yaw, cv.radius, cv.drawn,
+                        cv.twice, cv.ring, cv.beyond200, distinct);
+            CHECK(cv.twice == 0 && cv.ring > 500 && cv.beyond200 > 2000, "generated world dd 255 coverage");
+            CHECK(distinct > 16, "generated world frame has %d colours", distinct);
+            CHECK(net_state_checksum() == sum_a, "drawing the generated world changed the game state");
+        }
+        mode_stop_run();
+        g_settings = defaults;
+        world_set_size(256);
+    }
     std::printf("%s\n", g_fail ? "FAILED" : "PASS");
     return g_fail ? 1 : 0;
 }

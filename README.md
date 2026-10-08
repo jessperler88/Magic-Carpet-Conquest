@@ -145,7 +145,14 @@ extension and a custom Watcom calling-convention spec (`x86watcom.cspec`),
 Python 3.13 (`propack`, `pillow`, `pyghidra`), vcpkg with `sdl2:x64-windows`,
 Visual Studio 18 Build Tools, CMake 4.3.
 
-## Where things stand (2026-10-08, Conquest round 11 session 2 - branch `round11`)
+## Where things stand (2026-10-08, Conquest round 11 complete - branch `round11`)
+
+- **Round 11 session 3**: creatures wake near any wizard (bots included) in a Conquest run; Conquest runs over the
+  network - `MC_NET=1 mcport <dir> rts --net 2 --size 1024 --bots 3` on each machine (no lobby yet: everybody plays
+  the host's options, the extra records are bots), two instances stay in lockstep (4000 ticks checked); bots build
+  their first castle on their seat; every seat of a generated world starts with the Castle spell; the free camera
+  flies faster with Ctrl. New tests: `world_test` (all 140 levels identical to the pre-round-11 code),
+  `world_net_test`, `reference_world`. 69 ctest tests. Reports `docs/analysis/port_world_{session3,test,refwide}.md`.
 
 - **Generated worlds** (`src/mcengine/worldgen.h`): `mcport <dir> rts --size 1024 --bots 3` builds a seeded
   1024-cell world (512 .. 4096; `--generate` for a generated 256 world, `--tiled` for the old tiled test bed): a torus
@@ -160,7 +167,7 @@ Visual Studio 18 Build Tools, CMake 4.3.
   Worlds). 66 ctest tests, every reference set still identical.
 - Positions are 32-bit and the world size is a run-time parameter (256 .. 4096 cells, `src/mcengine/world.h`); the
   original game runs through the same code and stays byte-identical to the original (all reference sets).
-  Plan: `docs/ROADMAP_PHASE4.md` round 11 (session 3: wake-near-any-wizard, world tests, two-instance sync).
+  Plan: `docs/ROADMAP_PHASE4.md` (next: round 12, launching the mode from the menu / lobby).
 
 ## Before that (2026-10-08, Hidden Worlds)
 

@@ -9,6 +9,8 @@
 //   mcport [game_dir] network       the game with the multiplayer lobby (main-menu item 3); MC_NET_HOST /
 //                                   MC_NET_PORT select the name server (the first instance on a machine
 //                                   becomes it), MC_NET_SYNC=n compares the game state every n ticks (0 off)
+//   mcport [game_dir] rts [options] a Conquest mode run (rts_run.h); `rts --net N ...` = N humans over the
+//                                   network without the lobby (every instance: the same command, MC_NET=1)
 //
 // In a level: the mouse steers (pointer offset from the screen centre), Up / Down fly faster / slower,
 // Left / Right slide, left / right mouse button cast the spell in that hand, 1..0 (Ctrl+1..0) put a
@@ -309,7 +311,8 @@ static void maybe_inject_input(long frame_no) {
 }
 
 static void free_camera_step(Camera &cam, const mc::Input &in) {
-    const int speed = in.keys[SDL_SCANCODE_LSHIFT] ? 48 : 12;
+    int speed = in.keys[SDL_SCANCODE_LSHIFT] ? 48 : 12;
+    if (in.keys[SDL_SCANCODE_LCTRL] || in.keys[SDL_SCANCODE_RCTRL]) speed *= 4;   // round 11: crossing a 1024+ world
     int fwd = (in.keys[SDL_SCANCODE_W] ? 1 : 0) - (in.keys[SDL_SCANCODE_S] ? 1 : 0);
     int side = (in.keys[SDL_SCANCODE_D] ? 1 : 0) - (in.keys[SDL_SCANCODE_A] ? 1 : 0);
     // yaw 0 looks towards -y, 0x200 towards +x (render.h); sin/cos are 16.16
@@ -689,7 +692,7 @@ int main(int argc, char **argv) {
         if (!replay_run_parse(&argc, argv, &replay, &err)) { mclog(MCLOG_ERROR, "mcport: %s", err.c_str()); return 1; }
     }
     if (!config_load(s_save_dir.c_str(), &argc, argv, &g_settings, &s_opts)) {
-        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--size 256..4096] [--map 50..69] [--reseed] [--tiled | --generate] [--symmetry auto|none|point|mirror|rot4|dihedral] [--water %] [--rough %] [--continent %] [--springs N] [--wild %] [--lairs N] [--triggers N] [--portals N] [--no-debug] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
+        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--size 256..4096] [--map 50..69] [--reseed] [--tiled | --generate] [--symmetry auto|none|point|mirror|rot4|dihedral] [--water %] [--rough %] [--continent %] [--springs N] [--wild %] [--lairs N] [--triggers N] [--portals N] [--no-debug] [--net N] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
                            "[--replay-check N|state:FILE [--replay-ticks T]] "
                            "[--faithful] [--set section.key=value ...] [--config file]");
         return 1;
@@ -822,7 +825,11 @@ int main(int argc, char **argv) {
 
     // Network: `mcport <dir> network`, MC_NET=1 or MC_NET_HOST=<name server> (MC_NET_PORT, default 30600).
     // net_init_4ee70 makes the lobby (main-menu item 3) available; the join happens there.
-    TcpTransport *net = net_tcp_from_env(net_arg);
+    // `rts --net N` (round 11 session 3, rts_run.h): a network mode run without the lobby also opens the transport
+    bool rts_net = false;
+    if (rts && !scn_mode)
+        for (int i = 3; i < argc; i++) if (std::strcmp(argv[i], "--net") == 0) rts_net = true;
+    TcpTransport *net = net_tcp_from_env(net_arg || rts_net);
     if (net) {
         net_set_transport(net);
         NetLobbyHooks nh = net_lobby_hooks();

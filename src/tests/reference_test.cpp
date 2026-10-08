@@ -31,6 +31,15 @@
 // first 0x38d03 bytes are compared, a 0x38d09-byte snapshot is played from a truncated scratch copy, and
 // index.json "port_level" (100 + DDLEVELS entry) is the level the port loads. Suite mode runs them only
 // in a directory without 1996 references (extracted/reference/hw_gen, cd95_gen).
+//
+// Wide world (round 11 session 3, docs/analysis/port_world_refwide.md): MC_REF_WORLD=N (512 .. 4096, a power of
+// two) widens the world with world_widen_tiled(N) right after the snapshot pair is loaded (the first tick of the
+// playback; the generation check: after sim_load_level) and plays on in the tiled N-cell world. The original's
+// cell-list order is restored after the widening (world_widen_tiled relinks in slot order; MC_REF_WORLD_RELINK=slot
+// keeps that), so up to the first interaction across the old 255 -> 256 boundary the low halves the comparison
+// sees must stay identical. The maps are compared in tile (0,0), the cell-list heads folded over the tiles. Extra
+// output: the first tick a Thing leaves tile (0,0) and, at the first divergent tick, where the diverging Things are.
+// Unset: the program behaves exactly as without it.
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -41,6 +50,7 @@
 #include "hud.h"
 #include "projectiles.h"
 #include "mc_globals.h"
+#include "world.h"
 #include "mcfile.h"
 #include "crash_handler.h"
 #include <algorithm>
@@ -112,6 +122,8 @@ static bool ignore_player_byte(const uint8_t *ref_rec, int k) {
 // Round 11: both sides are compared as the original's byte image (mc_image.h): the reference as dumped
 // (relinked to index form), the port's state converted with state_to_image.
 static GameStateImage s_port_img;
+static int g_ref_world = 0;                 // MC_REF_WORLD (below); 0 = the original's world (the gate)
+static int edge_cells(int32_t x, int32_t y);
 static const GameStateImage &port_image() { state_to_image(*g_state, &s_port_img); return s_port_img; }
 
 static bool load_ref(const std::string &dir, int tick, GameStateImage *out) {
@@ -173,6 +185,16 @@ static int compare_states_brief(const GameStateImage &ref, const char *what) {
         if (trace) {
             std::printf("  gen slot %d (ref %d/%d/%d port %d/%d/%d):", i, pr[0x40], pr[0x41], pr[0x46], po[0x40], po[0x41],
                         po[0x46]);
+            if (g_ref_world) {
+                const Thing *t = thing_at((unsigned)i);
+                std::printf(" [cell %d,%d edge %d]", (int32_t)t->x >> 8, (int32_t)t->y >> 8, edge_cells(t->x, t->y));
+                for (unsigned k : {(unsigned)ref.things[i].target, (unsigned)t->target})
+                    if (k && k < (unsigned)thing_pool_slots()) {
+                        const Thing *o = thing_at(k);
+                        std::printf(" [target %u cell %d,%d edge %d]", k, (int32_t)o->x >> 8, (int32_t)o->y >> 8,
+                                    edge_cells(o->x, o->y));
+                    }
+            }
             for (const Field &f : kFields)
                 if (!is_link(f.off) && std::memcmp(pr + f.off, po + f.off, f.size))
                     std::printf(" %s %ld/%ld", f.name, field_value(pr, f), field_value(po, f));
@@ -223,24 +245,141 @@ static void level_reset_config_local() {
     g_cfg->paused &= ~1;
 }
 
+// ---- MC_REF_WORLD (round 11 session 3) ---------------------------------------------------------------------
+static bool g_ref_world_slot_order = false; // MC_REF_WORLD_RELINK=slot: keep world_widen_tiled's slot-order lists
+static int g_ref_widened_tick = -1;         // PlayerRec.tick when the world was widened
+// MC_REF_WORLD_GATE=K (cells, with MC_REF_WORLD): the wide-world gate (ctest reference_world). Instead of "no
+// divergence" the run passes when the RNG never differs, every slot's first divergence is within K cells of the
+// old 255 -> 256 boundary (the Thing, its target or the reference's target) and every differing map cell is too.
+static int g_ref_world_gate = -1;
+static int g_ref_map_far = 0;               // map cells differing farther than the gate from the boundary
+
+static int ref_world_from_env() {
+    const char *e = std::getenv("MC_REF_WORLD");
+    if (!e || !*e) return 0;
+    const int n = std::atoi(e);
+    if (n <= 256 || n > MC_WORLD_MAX || (n & (n - 1))) {
+        std::printf("MC_REF_WORLD=%s ignored (512 .. %d, a power of two)\n", e, MC_WORLD_MAX);
+        return 0;
+    }
+    return n;
+}
+
+// The port's map index of the original's cell i (tile (0,0) of a tiled world; i itself at 256).
+static uint32_t port_cell(int i) { return world_cell(i & 0xff, i >> 8); }
+
+// The original's cell-list head of cell i folded over the tiles: the head of the one tile whose list is not empty
+// (0 if none); -1 when Things of that 256-cell are in more than one tile (only possible after a boundary crossing).
+static int folded_head(int i) {
+    if (!world_wide()) return g_cell_things[i];
+    const int tiles = g_world.size >> 8;
+    int head = 0, lists = 0;
+    for (int ty = 0; ty < tiles; ty++)
+        for (int tx = 0; tx < tiles; tx++) {
+            const uint16_t h = g_cell_things[world_cell((i & 0xff) + tx * 256, (i >> 8) + ty * 256)];
+            if (h) { head = h; lists++; }
+        }
+    return lists > 1 ? -1 : head;
+}
+
+// Widen the loaded 256 world (g_hook_demo_textures_reload in this program: called by the playback right after
+// the snapshot pair is loaded, before the first tick's Thing updates). world_widen_tiled relinks every cell list
+// in slot order; the original's order (heads + links of the snapshot) is put back, so a cell's Things are
+// visited as in the original.
+static void ref_widen() {
+    if (!g_ref_world || world_wide()) return;
+    const int slots = thing_pool_slots();
+    std::vector<uint16_t> heads(g_cell_things, g_cell_things + MC_MAP_CELLS);
+    std::vector<uint16_t> nxt((size_t)slots), prv((size_t)slots);
+    std::vector<uint8_t> linked((size_t)slots);
+    for (int i = 0; i < slots; i++) {
+        const Thing *t = thing_at((unsigned)i);
+        nxt[(size_t)i] = t->cell_next; prv[(size_t)i] = t->cell_prev; linked[(size_t)i] = (t->flags & 4) ? 1 : 0;
+    }
+    if (!world_widen_tiled(g_ref_world)) { std::printf("MC_REF_WORLD: world_widen_tiled(%d) failed\n", g_ref_world); std::exit(2); }
+    int moved = 0;
+    if (!g_ref_world_slot_order) {
+        for (int i = 0; i < MC_MAP_CELLS; i++) g_cell_things[port_cell(i)] = heads[(size_t)i];
+        for (int i = 0; i < slots; i++) {
+            Thing *t = thing_at((unsigned)i);
+            if (t->cell_next != nxt[(size_t)i] || t->cell_prev != prv[(size_t)i]) moved++;
+            t->cell_next = nxt[(size_t)i]; t->cell_prev = prv[(size_t)i];
+            if (linked[(size_t)i]) t->flags |= 4u; else t->flags &= ~4u;
+        }
+    }
+    g_ref_widened_tick = g_state ? (int)g_state->players[g_state->local_player & 7].tick : -1;
+    std::printf("MC_REF_WORLD: widened to %d cells (tiled) at tick %d; cell lists %s (%d slots relinked back)\n",
+                g_world.size, g_ref_widened_tick, g_ref_world_slot_order ? "in slot order" : "in the original's order",
+                moved);
+}
+
+// Cells (outside tile (0,0)) whose terrain differs from the same cell of tile (0,0): terrain changed by a Thing that
+// had left tile (0,0).
+static int maps_off_tile0() {
+    if (!world_wide()) return 0;
+    int n = 0;
+    for (uint32_t c = 0; c < g_world.cells; c++) {
+        const int cx = world_cell_x(c), cy = world_cell_y(c);
+        if (cx < 256 && cy < 256) continue;
+        const uint32_t s = world_cell(cx & 0xff, cy & 0xff);
+        if (g_map_type[c] != g_map_type[s] || g_map_height[c] != g_map_height[s] || g_map_light[c] != g_map_light[s] ||
+            g_map_flags[c] != g_map_flags[s]) n++;
+    }
+    return n;
+}
+
+// Distance in cells of a coordinate pair to the nearest line x = 0 / y = 0 of the 256 torus (the old boundary).
+static int edge_cells(int32_t x, int32_t y) {
+    const int cx = (x >> 8) & 0xff, cy = (y >> 8) & 0xff;
+    const int ex = cx < 255 - cx ? cx : 255 - cx, ey = cy < 255 - cy ? cy : 255 - cy;
+    return ex < ey ? ex : ey;
+}
+
+// MC_REF_WORLD_GATE: a Thing at the old boundary (within the gate's cells of it, by its low halves) or outside tile
+// (0,0) (all its neighbours of the 256 world are in another tile); a pair whose 256-torus difference is not the
+// tiled world's difference (their shortest way in the original crosses the old boundary).
+static bool boundary_thing(const Thing *t) {
+    return edge_cells(t->x, t->y) <= g_ref_world_gate || (int32_t)t->x >= 0x10000 || (int32_t)t->y >= 0x10000;
+}
+static bool boundary_pair(const Thing *a, const Thing *b) {
+    const int32_t dx = (int32_t)b->x - (int32_t)a->x, dy = (int32_t)b->y - (int32_t)a->y;
+    return (int16_t)(uint16_t)dx != world_signed(dx) || (int16_t)(uint16_t)dy != world_signed(dy);
+}
+
 static int compare_maps(const std::string &dir, int tick, int *cell_diff) {
     char name[64];
     std::snprintf(name, sizeof name, "tick%05d.map", tick);
     std::string path = dir + "/" + name;
     mc_blob b;
     if (!mc_read_file(path.c_str(), &b)) return -1;
-    int diff = 0;
+    int diff = 0, far_edge = 0;
     *cell_diff = 0;
     if (b.len >= 0x60000) {
         const uint8_t *m = b.data;
         for (int i = 0; i < MC_MAP_CELLS; i++) {
-            if (m[i] != g_map_type[i] || m[0x10000 + i] != g_map_height[i] || m[0x20000 + i] != g_map_light[i] ||
-                m[0x30000 + i] != g_map_flags[i]) diff++;
+            const uint32_t p = port_cell(i);
+            const int diff_before = diff;
+            bool d = false;
+            if (m[i] != g_map_type[p] || m[0x10000 + i] != g_map_height[p] || m[0x20000 + i] != g_map_light[p] ||
+                m[0x30000 + i] != g_map_flags[p]) { diff++; d = true; }
             uint16_t c; std::memcpy(&c, m + 0x40000 + i * 2, 2);
-            if (c != g_cell_things[i]) (*cell_diff)++;
+            if ((int)c != folded_head(i)) { (*cell_diff)++; d = true; }
+            // the terrain only: a cell-list head follows the Things, whose divergences the slots report
+            if (d && g_ref_world && diff_before != diff) {
+                const int e = edge_cells((i & 0xff) << 8, (i >> 8) << 8);
+                if (e > far_edge) far_edge = e;
+                if (g_ref_world_gate >= 0 && e > g_ref_world_gate) {
+                    g_ref_map_far++;
+                    std::printf("      MC_REF_WORLD: cell %d,%d (edge %d): type %d/%d height %d/%d light %d/%d flags %d/%d\n",
+                                i & 0xff, i >> 8, e, m[i], g_map_type[p], m[0x10000 + i], g_map_height[p], m[0x20000 + i],
+                                g_map_light[p], m[0x30000 + i], g_map_flags[p]);
+                }
+            }
         }
     }
     mc_blob_free(&b);
+    if (g_ref_world && (diff || *cell_diff))
+        std::printf("      MC_REF_WORLD: the differing terrain cells reach %d cells from the old boundary\n", far_edge);
     return diff;
 }
 
@@ -311,6 +450,17 @@ int main(int argc, char **argv) {
     }
     if (!sim_init(game_dir)) { std::printf("sim_init failed\n"); return 2; }
     sim_register_gameplay();
+    g_ref_world = ref_world_from_env();
+    if (g_ref_world) {
+        const char *rl = std::getenv("MC_REF_WORLD_RELINK");
+        g_ref_world_slot_order = rl && !std::strcmp(rl, "slot");
+        // reference_test links no renderer: the texture reload hook of the playback start is free
+        if (g_hook_demo_textures_reload) { std::printf("MC_REF_WORLD: the snapshot hook is taken\n"); return 2; }
+        g_hook_demo_textures_reload = ref_widen;
+        if (const char *gt = std::getenv("MC_REF_WORLD_GATE")) g_ref_world_gate = std::atoi(gt);
+        std::printf("MC_REF_WORLD=%d: the world is tiled to %d x %d cells after the snapshot load\n", g_ref_world,
+                    g_ref_world, g_ref_world);
+    }
 
     // Level mode: index.json of a run_level.py reference names the level and the recording.
     const int level = index_int(ref_dir, "level", -1);
@@ -471,6 +621,10 @@ int main(int argc, char **argv) {
     std::printf("tick  same/live  diff(links only)  by class [diff/live]                     rng  players\n");
     bool more = !gen_only;
     int pool_full_tick = 0;     // round 7: the first tick in which the port's pool had no free slot
+    int wide_cross_tick = 0, wide_cross_slot = 0;   // MC_REF_WORLD: the first Thing outside tile (0,0)
+    bool wide_diag_done = false;                    // MC_REF_WORLD: the first divergent tick described
+    std::vector<int> wide_div_slots;
+    int wide_unexplained = 0;                       // MC_REF_WORLD_GATE: divergences away from the old boundary
     for (int steps = 0; more && steps < 1000000; steps++) {
         // render_frame_1fab0's state writes of the previous tick (hud_tick_state). The original renders
         // after sound_update, where the reference exe dumps, so dump N holds them up to tick N - 1.
@@ -479,20 +633,31 @@ int main(int argc, char **argv) {
         more = demo_step();
         int tick = (int)g_state->players[g_state->local_player & 7].tick;
         if (!pool_full_tick && (g_thing_alloc_failures != pool_fail0 || thing_free_count() == 0)) pool_full_tick = tick;
+        if (g_ref_world && world_wide() && !wide_cross_tick)
+            for (int i = 1; i < thing_pool_slots(); i++) {
+                const Thing *t = thing_at((unsigned)i);
+                if (t->cls && ((int32_t)t->x >= 0x10000 || (int32_t)t->y >= 0x10000)) {
+                    wide_cross_tick = tick; wide_cross_slot = i;
+                    std::printf("MC_REF_WORLD: tick %d: slot %d (%s %d/%d) is the first Thing outside tile (0,0), at "
+                                "cell %d,%d\n", tick, i, cls_name(t->cls), t->type, t->state, (int32_t)t->x >> 8,
+                                (int32_t)t->y >> 8);
+                    break;
+                }
+            }
         if (std::getenv("MC_REF_STEPS")) std::printf("  step %d tick %d\n", steps, tick);
         // MC_REF_CELLCHECK=1: walk every cell list (g_cell_things heads, Thing.cell_next) and report a list
         // that does not end within the pool size (a cycle) - used to explain the original's hang after a
         // quick load (the cell heads are not part of the quick save).
         if (std::getenv("MC_REF_CELLCHECK")) {
             int cyc = 0, first_cell = -1;
-            for (int c = 0; c < MC_MAP_CELLS; c++) {
+            for (uint32_t c = 0; c < g_world.cells; c++) {
                 unsigned i = g_cell_things[c];
                 int n = 0;
                 while (i != 0 && i < MC_THING_SLOTS && n <= MC_THING_SLOTS) { i = g_state->things[i].cell_next; n++; }
-                if (n > MC_THING_SLOTS) { if (!cyc++) first_cell = c; }
+                if (n > MC_THING_SLOTS) { if (!cyc++) first_cell = (int)c; }
             }
             if (cyc) std::printf("  step %d tick %d: %d cell lists do not terminate (first cell %d,%d)\n", steps, tick, cyc,
-                                 first_cell & 0xff, first_cell >> 8);
+                                 world_cell_x((uint32_t)first_cell), world_cell_y((uint32_t)first_cell));
         }
         if (tick > last_tick && !has_quickload) break;
         if (steps >= step_limit) break;
@@ -526,6 +691,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (kc < 14) { cdiff[kc]++; if (!class_first[kc]) class_first[kc] = tick; }
+            if (g_ref_world && !div[i].tick) wide_div_slots.push_back(i);
             SlotDiv &d = div[i];
             if (!d.tick) {
                 d.tick = tick;
@@ -588,6 +754,71 @@ int main(int argc, char **argv) {
             for (int k = 0; k < (int)sizeof(PlayerRec); k++) if (a[k] != b[k] && !ignore_player_byte(a, k)) { off = k; break; }
             pl[pn++] = off < 0 ? '=' : 'x';
             if (off >= 0 && !first_player_tick[p]) { first_player_tick[p] = tick; first_player_off[p] = off; }
+        }
+        // MC_REF_WORLD: where the Things of the first divergent tick are (full port coordinates, distance to the old
+        // 255 -> 256 boundary in cells, their target), the local wizard, and how many Things have left tile (0,0).
+        // Then (MC_REF_WORLD_WHERE=n lines, default 40) every slot at its first divergence the same way.
+        auto where = [](const Thing *t) {
+            std::printf("cell %d.%02x,%d.%02x (edge %d)", (int32_t)t->x >> 8, (unsigned)((int32_t)t->x & 0xff),
+                        (int32_t)t->y >> 8, (unsigned)((int32_t)t->y & 0xff), edge_cells(t->x, t->y));
+        };
+        if (g_ref_world && !wide_diag_done && (!wide_div_slots.empty() || !rng_same || nref != nport || std::strchr(pl, 'x'))) {
+            wide_diag_done = true;
+            int off_tile = 0;
+            for (int i = 1; i < thing_pool_slots(); i++) {
+                const Thing *t = thing_at((unsigned)i);
+                if (t->cls && ((int32_t)t->x >= 0x10000 || (int32_t)t->y >= 0x10000)) off_tile++;
+            }
+            std::printf("MC_REF_WORLD: first divergent tick %d: %zu slot(s), rng %s, players %s, things %d/%d; %d Things "
+                        "outside tile (0,0); terrain changed outside tile (0,0) in %d cells\n", tick, wide_div_slots.size(),
+                        rng_same ? "same" : "DIFFERS", pl, nport, nref, off_tile, maps_off_tile0());
+            const Thing *w = thing_at(thing_wrap(g_state->players[g_state->local_player & 7].thing));
+            std::printf("  local wizard (slot %u) at ", (unsigned)g_state->players[g_state->local_player & 7].thing);
+            where(w);
+            std::printf("\n");
+        }
+        if (g_ref_world) {
+            static int where_left = -1;
+            if (where_left < 0) where_left = std::getenv("MC_REF_WORLD_WHERE") ? std::atoi(std::getenv("MC_REF_WORLD_WHERE")) : 40;
+            for (int i : wide_div_slots) {
+                const ThingImage &r = ref.things[i];
+                const Thing *t = thing_at((unsigned)i);
+                // MC_REF_WORLD_GATE=K: a divergence is a boundary effect when the Thing, its target or the reference's
+                // target is within K cells of the old boundary (low halves: a Thing that crossed counts as at it)
+                if (g_ref_world_gate >= 0) {
+                    // a spell sits at (0,0): its owner (the wizard) stands for it
+                    const bool spell = r.cls == 12 || t->cls == 12;
+                    const Thing *self = spell ? (t->owner && t->owner < (unsigned)thing_pool_slots() ? thing_at(t->owner) : nullptr) : t;
+                    bool at_edge = self && boundary_thing(self);
+                    for (unsigned k : {(unsigned)t->owner, (unsigned)t->target, (unsigned)r.target}) {
+                        if (!k || k >= (unsigned)thing_pool_slots() || (int)k == i) continue;
+                        const Thing *o = thing_at(k);
+                        if (o->cls == 12) continue;
+                        if (boundary_thing(o) || (self && boundary_pair(self, o))) at_edge = true;
+                    }
+                    if (!at_edge) {
+                        wide_unexplained++;
+                        std::printf("  UNEXPLAINED %d slot %d (%s %d/%d) at cell %d,%d (edge %d): not within %d cells of the "
+                                    "old boundary\n", tick, i, cls_name(r.cls), r.type, r.state, (int32_t)t->x >> 8,
+                                    (int32_t)t->y >> 8, edge_cells(t->x, t->y), g_ref_world_gate);
+                    }
+                }
+                if (where_left <= 0) continue;
+                where_left--;
+                std::printf("  where %d slot %d ref %s %d/%d port %s %d/%d at ", tick, i, cls_name(r.cls), r.type, r.state,
+                            cls_name(t->cls), t->type, t->state);
+                where(t);
+                if (t->target && t->target < (unsigned)thing_pool_slots()) {
+                    std::printf("; target %u at ", (unsigned)t->target);
+                    where(thing_at(t->target));
+                }
+                if (r.target != t->target && r.target && r.target < (unsigned)thing_pool_slots()) {
+                    std::printf("; ref target %u at ", (unsigned)r.target);
+                    where(thing_at(r.target));
+                }
+                std::printf("\n");
+            }
+            wide_div_slots.clear();
         }
         bool print = compared <= 20 || tick % 100 == 0 || !more;
         if (print) {
@@ -658,6 +889,7 @@ int main(int argc, char **argv) {
             sim_prepare_movie();
             level_reset_config_local();
             if (sim_load_level(load_level)) {
+                ref_widen();                             // MC_REF_WORLD (nothing otherwise)
                 game_tick_sim();
                 gen_diff = compare_states_brief(ref, "level generation + tick 1");
                 // The recording's map file is the terrain at tick 2 (one tick later; terrain rarely changes
@@ -667,8 +899,12 @@ int main(int argc, char **argv) {
                 mc_blob m{};
                 if (const char *dump = std::getenv("MC_REF_GEN_DUMP")) {     // the port's four maps, raw
                     if (FILE *fp = std::fopen(dump, "wb")) {
-                        std::fwrite(g_map_type, 1, 0x10000, fp); std::fwrite(g_map_height, 1, 0x10000, fp);
-                        std::fwrite(g_map_light, 1, 0x10000, fp); std::fwrite(g_map_flags, 1, 0x10000, fp);
+                        // tile (0,0) of a wide world (port_cell): the same bytes at 256
+                        std::vector<uint8_t> raw(0x10000);
+                        for (const uint8_t *src : {g_map_type, g_map_height, g_map_light, g_map_flags}) {
+                            for (int i = 0; i < 0x10000; i++) raw[(size_t)i] = src[port_cell(i)];
+                            std::fwrite(raw.data(), 1, raw.size(), fp);
+                        }
                         std::fclose(fp);
                     }
                 }
@@ -679,10 +915,10 @@ int main(int argc, char **argv) {
                     for (int k = 0; k < 4; k++) {
                         int n = 0, first = -1;
                         for (int i = 0; i < MC_MAP_CELLS; i++)
-                            if (m.data[k * 0x10000 + i] != maps[k][i]) { if (first < 0) first = i; n++; }
+                            if (m.data[k * 0x10000 + i] != maps[k][port_cell(i)]) { if (first < 0) first = i; n++; }
                         std::printf(" %s %d", mname[k], n);
                         if (n) std::printf(" (first cell %d,%d: %d/%d)", first & 0xff, first >> 8, m.data[k * 0x10000 + first],
-                                           maps[k][first]);
+                                           maps[k][port_cell(first)]);
                     }
                     std::printf("\n");
                 }
@@ -707,8 +943,26 @@ int main(int argc, char **argv) {
         take(first_rng_tick);
         take(first_count_tick);
         take(first_map_tick);
-        std::printf("LEVEL %d: first divergent tick %d (0 = none) over %d ticks; level generation %s\n", level, first,
+        std::printf("LEVEL %d: first divergent tick %d (0 = none) over %d ticks; level generation %s", level, first,
                     compared, gen_diff < 0 ? "not checked" : gen_diff ? "differs" : "identical");
+        if (g_ref_world)
+            std::printf("; MC_REF_WORLD %d: first Thing outside tile (0,0) in tick %d (slot %d)", g_ref_world,
+                        wide_cross_tick, wide_cross_slot);
+        std::printf("\n");
+    } else if (g_ref_world) {
+        int first = 0;
+        for (int i = 1; i < MC_THING_SLOTS; i++) if (div[i].tick && (!first || div[i].tick < first)) first = div[i].tick;
+        for (int p = 0; p < 8; p++) if (first_player_tick[p] && (!first || first_player_tick[p] < first)) first = first_player_tick[p];
+        for (int t : {first_rng_tick, first_count_tick, first_map_tick}) if (t && (!first || t < first)) first = t;
+        std::printf("MC_REF_WORLD %d: first divergent tick %d (0 = none) over %d ticks; first Thing outside tile (0,0) in "
+                    "tick %d (slot %d)\n", g_ref_world, first, compared, wide_cross_tick, wide_cross_slot);
+    }
+    if (g_ref_world && g_ref_world_gate >= 0) {
+        const bool pass = !first_rng_tick && !wide_unexplained && !g_ref_map_far && !missing && gen_diff <= 0;
+        std::printf("%s: MC_REF_WORLD gate (boundary %d cells): %d divergence(s), %d slot(s) away from the old boundary, "
+                    "%d map cell(s) away from it, RNG %s\n", pass ? "OK" : "FAIL", g_ref_world_gate, diverged,
+                    wide_unexplained, g_ref_map_far, first_rng_tick ? "differs" : "identical");
+        return pass ? 0 : 1;
     }
     return diverged || missing || gen_diff > 0 ? 1 : 0;
 }

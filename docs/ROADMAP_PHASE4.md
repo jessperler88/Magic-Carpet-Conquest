@@ -195,11 +195,19 @@ min(N/2, 256)`, draw distance up to 255 at N >= 512) / HUD / map screen (window 
 `mcport rts --size 512..4096` runs a **tiled** world (the template map repeated) until the generator lands; two
 runs at 1024 give identical checksums. Sizes are powers of two only (768 dropped: masks everywhere).
 **Session 2 DONE 2026-10-08** (66/66 ctest, references identical; report `docs/analysis/port_world_gen.md`):
-`rts --size N` builds a generated, symmetric world with features, triggers and portals (B4 + B5 below). Session 3: B6 wake-near-any-wizard, `world_test`
-/ `MC_REF_WORLD`, two-process sync at 1024, the gate, plus the open design points the sweep listed (fixed-range
-constants that do not scale: sound cull, tether, teleport gate 128 cells, spiral search 15 rings; world-wide
-searches such as skeletons -> nearest enemy castle; castle-site quadrants growing with N; rivers / source tries
-scaling with area; `draw_distance` max 127 in config / pause menu).
+`rts --size N` builds a generated, symmetric world with features, triggers and portals (B4 + B5 below).
+**Session 3 DONE 2026-10-08 - ROUND 11 COMPLETE** (69/69 ctest, every reference set identical; reports
+`docs/analysis/port_world_{session3,test,refwide}.md`): B6 wake near any wizard (offline and online mode runs);
+`NetGameRules` carries the `ModeParams`, computer wizards in a network mode run, `mode_start_net_run`,
+`mcport rts --net N`; `world_net_test` (two processes, 1024, 2 humans + 3 bots, 2000 ticks in sync); two checksum
+fixes (combat-music timer, free-slot flag bit 0 - per-instance state); `world_test` (all 140 levels at 256 hash-identical
+to the pre-round-11 code `bf77e98`, 512 / 2048 / 4096 probes, rts 1024 determinism); `MC_REF_WORLD` + ctest
+`reference_world` (divergences explained by the old boundary); dd 127 / 255 at 1024 in `world_render_test`. Scaling
+decisions (session3 report section 3): AI castle site = own seat, then 64-cell quadrants around the wizard; a
+generated world gives every seat spells 0 / 3 / Castle, all allowed (template 59 left bots castle-less); the
+original's half-world separation line removed for N > 256; perception / spell ranges and the nearest-anywhere
+searches kept (bot hunt radius = round 17). **Gate met**: two headless `mcport rts --net 2 --seed 1 --size 1024
+--bots 3` ran 4000 ticks with no desync and identical final checksums; the free camera wraps the world (Ctrl x4).
 
 - [x] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `world_cell_x/y`,
       `world_cx`, `world_signed` (= the original's `(int16_t)` at 256), `world_dist_sq` int64), replacing `mc_cell`,
@@ -250,19 +258,22 @@ scaling with area; `draw_distance` max 127 in config / pause menu).
       - Both carried by the world seed / `WorldParams` (counts, payload weights, re-arm on / off), so every peer and
         every replay places the same triggers; a scenario per payload type (fly over, assert the spawn). Keep the
       payload table data-driven: round 20 adds MC2's trigger types in a second pass.
-- [ ] B6 deterministic wake-near-any-wizard under the mode flag (session 3; the distance maths is already int64 /
-      torus-correct). Done in session 1: `ai_wizard` castle-site quadrants scale with the world, sound cull int64.
+- [x] B6 deterministic wake-near-any-wizard under the mode flag (session 3: nearest wizard of every record in play,
+      also in a network mode run; `world_net_test`). Session 1: castle-site quadrants scale with the world (session 3:
+      replaced in a wide mode world by own seat + 64-cell quadrants), sound cull int64.
 - [x] B7 `render_ext` window `kWin = min(N/2, 256)`, vertex cache sizing, camera no longer truncated to u16, draw
       distance up to 255 at N >= 512 (the ini / pause-menu maximum is still 127); radar via the accessors; the map
       screen shows a window around the player at the original scale (whole world = the round 16 minimap);
       interpolated camera keeps the whole coordinate (session 1).
-- [ ] B9 `world_test`: 256 through the new code == old arrays for all 69 levels; 512 / 1024 seam walks, spiral
+- [x] B9 (session 3: `world_test` - 140 levels incl. Hidden Worlds hash-identical to `bf77e98`, golden file
+      `src/tests/data/world_levels_256.txt`; `reference_world`; `world_render_test` dd 127 / 255; `world_net_test`)
+      `world_test`: 256 through the new code == old arrays for all 69 levels; 512 / 1024 seam walks, spiral
       queries across the seam, two-instance determinism for 2000 ticks, save round trip, overflow probes at 500
       cells; `render_ext_test` on 1024 at dd 127 and 255; `MC_REF_WORLD=1024` campaign references diverge only
       where a Thing crosses the old boundary. Partly done in session 1: five per-subsystem tests on a tiled 1024
       world (`world_{terrain,things,creatures,persist,render}_test`: seam walks, spiral / area queries across both
       seams, 300-600-cell distances and angles, save / movie round trips, pixel-identical tiled frames, dd 200).
-- Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` runs, two instances stay in sync, the free camera
+- Gate (**met** 2026-10-08, session 3): `mcport <dir> rts --seed 1 --size 1024 --bots 3` runs, two instances stay in sync, the free camera
   flies the whole world. Effort 25-35 days (the largest round; split: accessors / positions / generator /
   placer / renderer+tests).
 
@@ -567,20 +578,11 @@ the CPU path is the limit.
 
 ---
 
-## 6. Next session: round 11 session 3 (wake rule, world tests, sync at 1024, the gate)
+## 6. Next: round 12 (launching the mode)
 
-Work continues on branch `round11` (session 1: `b8cf714`, `f724143`, `acb4880`; session 2: the "Round 11 session 2"
-commit). Read `docs/port/BRIEFING_round11.md` (session 2 section), `docs/analysis/port_world_gen.md` and the five
-`port_world_*.md` reports, then:
-- **B6**: creatures wake near **any** wizard under the mode flag (deterministic; today the local player only, and off
-  in network games - in a generated 1024 world most lairs would sleep forever). Check the AI wizards' own searches
-  over the bigger world (targets, castle sites, mana) with a few bot-vs-bot headless runs.
-- **B9**: `world_test` (256 through the new code == the original arrays for all 69 levels, overflow probes at 500
-  cells), `MC_REF_WORLD`, `render_ext_test` at 1024 dd 127 / 255.
-- Two-process lockstep (`net_test` parts 2-3 pattern) on `rts --size 1024 --bots 3` for 2000 ticks; the ModeParams
-  (with `WorldParams`) must travel with the network rules until round 12's lobby does it.
-- The scaling decisions listed under session 3 above (sound cull, tether, spiral rings, skeleton targets, castle-site
-  quadrants, rivers / tries - done for the generator). (`draw_distance` up to 255 in wide worlds: done in session 2.)
-- Gate: `mcport <dir> rts --seed 1 --size 1024 --bots 3` plays, two instances stay in sync, the free camera flies the
-  whole world.
-- Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2`.
+Round 11 is complete on branch `round11` (sessions 1-3; the user merges into main). Round 12 starts from section 4's
+round 12 list. What round 11 hands over: `mode_start_net_run` (mode_level.h) is the call the lobby makes after its
+setup exchange (replacing `rts --net`); `NetGameRules.mode_params` carries the setup; bots die to woken monsters before
+their castle and never respawn without one (round 13's respawn rule); bots roam the whole world for mana (round 17).
+Tests that load several levels in one process must reset the carried-over globals (`port_world_test.md`).
+Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2`.

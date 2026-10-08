@@ -190,6 +190,8 @@ void mode_dump_json(std::string *out, long ticks_run, const char *extra_members)
             j.obj("castle");
             j.kv("thing", P.castle);
             j.kv("level", P.castle_level);
+            j.kv("x", (int32_t)c->x);
+            j.kv("y", (int32_t)c->y);
             j.kv("health", c->health);
             j.kv("max_health", c->max_health);
             j.kv("mana", c->mana);

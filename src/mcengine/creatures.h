@@ -116,6 +116,9 @@ void creature_wake_tick();
 // timer_b counts down; at 0 the squared xy distance to the local player's thing is tested: below
 // 0x2400000 -> timer_a = 0x10 (segments 0x12) and cast_ticks := |dy| (the original pushes the dy^2
 // left in EDX by pos_dist_sq_xy as the argument of math_isqrt). Returns 0.
+// Port (round 11 B6): in a mode run the distance is to the nearest wizard of any player record in play
+// (human or computer; deterministic, the same on every peer), and the wake tick also runs in a network
+// mode run (thing.cpp; the original skips it in a network game, which leaves every creature awake).
 int  creature_proximity_wake_timer(Thing *t);
 
 // ---- per-type helpers other subsystems may want (creatures.cpp) -----------------------------------

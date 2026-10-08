@@ -570,6 +570,17 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     g_rng16 = (uint16_t)gen.seed;
     g_state->rng = (uint32_t)gen.seed;
     const uint32_t seed = mix(params.seed ^ 0x3017d00du);
+    // The spells: every seat the same (a symmetric world is only fair with a symmetric start) - the multiplayer
+    // standard of levels 50 / 52 / 53 ...: spells 0, 3 and the Castle (0x10) at the start, all 24 allowed. Some
+    // templates start seats without the Castle because their map holds castle urns, which a generated world
+    // replaces (round 11 session 3: on template 59 no computer wizard ever built a castle).
+    for (int p = 0; p < 8; p++) {
+        uint8_t *blk = level->player_block[p];
+        for (int id = 0; id < 24; id++) {
+            blk[0x10 + id] = (id == 0 || id == 3 || id == 0x10) ? 1 : 0;
+            blk[0x74 + id] = 1;
+        }
+    }
 
     // height field
     {
