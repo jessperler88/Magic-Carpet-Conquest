@@ -3,6 +3,7 @@
 #include "terrain_paint.h"
 #include "mc_math.h"
 #include "terrain.h"
+#include "world.h"
 #include "gen/features_tables.h"
 #include "mcfile.h"
 #include <cstdio>
@@ -10,7 +11,10 @@
 
 int32_t g_terrain_nearly_flat = 0;
 
-static inline unsigned cell_xy(uint8_t x, uint8_t y) { return ((unsigned)y << 8) | x; }
+// Round 11: cells through world.h (the original's (y << 8) | x on 8-bit coordinates at N = 256). A cell
+// index handed in is wrapped onto the map (the original's `& 0xffff`).
+static inline unsigned cell_xy(int x, int y) { return world_cell(x, y); }
+static inline unsigned cell_wrap(unsigned cell) { return cell & (g_world.cells - 1); }
 
 // ---- spiral search (spiral_search_init_101b0 / _begin_10080 / _next_10120 / _end_10100) ---------
 // search.dat is a 32x32 image of ring numbers (0 = the 2x2 centre quad, 15 = outermost, 254 = unused).
@@ -108,12 +112,12 @@ bool terrain_paint_load_data(const char *game_dir) {
 
 // terrain_slope_orientation_31f90
 int terrain_slope_orientation(unsigned cell, unsigned dl_in, unsigned cl_in) {
-    uint8_t x = (uint8_t)cell, y = (uint8_t)(cell >> 8);
+    const int x = world_cell_x(cell), y = world_cell_y(cell);
     const uint8_t h[4] = {
         g_map_height[cell_xy(x, y)],
-        g_map_height[cell_xy((uint8_t)(x + 1), y)],
-        g_map_height[cell_xy((uint8_t)(x + 1), (uint8_t)(y + 1))],
-        g_map_height[cell_xy(x, (uint8_t)(y + 1))],
+        g_map_height[cell_xy(x + 1, y)],
+        g_map_height[cell_xy(x + 1, y + 1)],
+        g_map_height[cell_xy(x, y + 1)],
     };
     uint8_t lo = 0xff, hi = 0;
     uint8_t hi_idx = (uint8_t)dl_in;        // DL: only written when a corner is above 0
@@ -140,10 +144,10 @@ int terrain_slope_orientation(unsigned cell, unsigned dl_in, unsigned cl_in) {
 
 // terrain_paint_cell_32150
 void terrain_paint_cell(unsigned cell_in, unsigned kind_in, unsigned dl_in, unsigned cl_in) {
-    unsigned cell = cell_in & 0xffff;
-    uint8_t x = (uint8_t)cell, y = (uint8_t)(cell >> 8);
+    unsigned cell = cell_wrap(cell_in);
+    const int x = world_cell_x(cell), y = world_cell_y(cell);
     uint8_t kind = (uint8_t)kind_in;
-    unsigned checker = ((unsigned)(uint8_t)(x + y) & 1) << 3;
+    unsigned checker = ((unsigned)(x + y) & 1) << 3;     // parity: the same with or without the byte wrap
     if (kind < 8) {
         g_map_flags[cell] = (uint8_t)((g_map_flags[cell] & 0xf0) | kind);
         terrain_retexture_rect(cell, cell);
@@ -185,28 +189,28 @@ void terrain_paint_cell(unsigned cell_in, unsigned kind_in, unsigned dl_in, unsi
         g_map_flags[cell] = (uint8_t)(tab[1] | (g_map_flags[cell] & 0x8f));
     }
     g_map_flags[cell] = (uint8_t)((g_map_flags[cell] | 0x80) & 0xf7);
-    g_map_flags[cell_xy((uint8_t)(x + 1), y)] &= 0xf7;
-    g_map_flags[cell_xy((uint8_t)(x + 1), (uint8_t)(y + 1))] &= 0xf7;
-    g_map_flags[cell_xy(x, (uint8_t)(y + 1))] &= 0xf7;
+    g_map_flags[cell_xy(x + 1, y)] &= 0xf7;
+    g_map_flags[cell_xy(x + 1, y + 1)] &= 0xf7;
+    g_map_flags[cell_xy(x, y + 1)] &= 0xf7;
 }
 
-// Light value of one cell as the two retexture functions compute it (8-bit arithmetic).
-static inline int8_t light_slope(uint8_t x, uint8_t y) {
-    uint8_t d = (uint8_t)(g_map_height[cell_xy((uint8_t)(x + 1), (uint8_t)(y + 1))] -
-                          g_map_height[cell_xy((uint8_t)(x - 1), (uint8_t)(y - 1))]);
+// Light value of one cell as the two retexture functions compute it (8-bit arithmetic on the heights).
+static inline int8_t light_slope(int x, int y) {
+    uint8_t d = (uint8_t)(g_map_height[cell_xy(x + 1, y + 1)] - g_map_height[cell_xy(x - 1, y - 1)]);
     return (int8_t)(uint8_t)(0x20 - d);
 }
 
 // terrain_set_quad_texture_32430
 void terrain_set_quad_texture(unsigned cell, unsigned texture) {
-    uint8_t x = (uint8_t)cell, y = (uint8_t)(cell >> 8), tex = (uint8_t)texture;
+    const int x = world_cell_x(cell), y = world_cell_y(cell);
+    const uint8_t tex = (uint8_t)texture;
     g_map_type[cell_xy(x, y)] = tex;
-    g_map_type[cell_xy((uint8_t)(x - 1), y)] = tex;
-    g_map_type[cell_xy((uint8_t)(x - 1), (uint8_t)(y - 1))] = tex;
-    g_map_type[cell_xy(x, (uint8_t)(y - 1))] = tex;
+    g_map_type[cell_xy(x - 1, y)] = tex;
+    g_map_type[cell_xy(x - 1, y - 1)] = tex;
+    g_map_type[cell_xy(x, y - 1)] = tex;
     for (int r = 0; r < 3; r++)
         for (int c = 0; c < 3; c++) {
-            uint8_t px = (uint8_t)(x - 1 + c), py = (uint8_t)(y - 1 + r);
+            const int px = world_wrap_cell(x - 1 + c), py = world_wrap_cell(y - 1 + r);
             int8_t v = light_slope(px, py);
             if (v < 0x20) v = 0x20;
             else if (v > 0x28) v = (int8_t)((v & 7) + 0x28);
@@ -217,38 +221,40 @@ void terrain_set_quad_texture(unsigned cell, unsigned texture) {
 }
 
 // terrain_retexture_rect_324e0 / terrain_retexture_rect_force_32760
+// The rectangle's width / height are cell-coordinate differences + 1 wrapped onto the world like the
+// original's bytes (a rectangle across the seam works; w == 0 walks nothing, as the byte counters do).
 static void retexture_rect(unsigned c0, unsigned c1, bool force) {
-    uint8_t x0 = (uint8_t)c0, y0 = (uint8_t)(c0 >> 8);
-    uint8_t w = (uint8_t)((uint8_t)c1 - x0 + 1);
-    uint8_t h = (uint8_t)((uint8_t)(c1 >> 8) - y0 + 1);
-    auto mark = [force](uint8_t x, uint8_t y) {
+    int x0 = world_cell_x(c0), y0 = world_cell_y(c0);
+    int w = world_wrap_cell(world_cell_x(c1) - x0 + 1);
+    int h = world_wrap_cell(world_cell_y(c1) - y0 + 1);
+    auto mark = [force](int x, int y) {
         unsigned c = cell_xy(x, y);
         if (force || !(g_map_flags[c] & 0x80)) g_map_type[c] = 1;
     };
     // pass 1: mark the quads touching the rectangle
-    uint8_t cx = x0, cy = y0;
-    for (uint8_t r = h; r != 0; r--) {
-        for (uint8_t c = w; c != 0; c--) {
+    int cx = x0, cy = y0;
+    for (int r = h; r != 0; r--) {
+        for (int c = w; c != 0; c--) {
             mark(cx, cy);
-            mark((uint8_t)(cx - 1), cy);
-            mark((uint8_t)(cx - 1), (uint8_t)(cy - 1));
-            mark(cx, (uint8_t)(cy - 1));
-            cx++;
+            mark(cx - 1, cy);
+            mark(cx - 1, cy - 1);
+            mark(cx, cy - 1);
+            cx = world_wrap_cell(cx + 1);
         }
-        cx = (uint8_t)(cx - w);
-        cy++;
+        cx = world_wrap_cell(cx - w);
+        cy = world_wrap_cell(cy + 1);
     }
     // pass 2: marked cells take the texture of their corner-class tuple
-    x0--; y0--; w++; h++;
+    x0 = world_wrap_cell(x0 - 1); y0 = world_wrap_cell(y0 - 1); w = world_wrap_cell(w + 1); h = world_wrap_cell(h + 1);
     cx = x0; cy = y0;
-    for (uint8_t r = h; r != 0; r--) {
-        for (uint8_t c = w; c != 0; c--) {
+    for (int r = h; r != 0; r--) {
+        for (int c = w; c != 0; c--) {
             unsigned p = cell_xy(cx, cy);
             if (g_map_type[p] == 1) {
                 unsigned idx = (g_map_flags[p] & 7u) * 0x157u
-                             + (g_map_flags[cell_xy((uint8_t)(cx + 1), cy)] & 7u) * 0x31u
-                             + (g_map_flags[cell_xy((uint8_t)(cx + 1), (uint8_t)(cy + 1))] & 7u) * 7u
-                             + (g_map_flags[cell_xy(cx, (uint8_t)(cy + 1))] & 7u);
+                             + (g_map_flags[cell_xy(cx + 1, cy)] & 7u) * 0x31u
+                             + (g_map_flags[cell_xy(cx + 1, cy + 1)] & 7u) * 7u
+                             + (g_map_flags[cell_xy(cx, cy + 1)] & 7u);
                 uint8_t tex = g_corner_tex_table[idx][0];
                 g_map_type[p] = tex;
                 if (tex < 8)
@@ -256,53 +262,55 @@ static void retexture_rect(unsigned c0, unsigned c1, bool force) {
                 else
                     g_map_flags[p] = (uint8_t)((g_map_flags[p] & 0x87) + g_corner_tex_table[idx][1]);
             }
-            cx++;
+            cx = world_wrap_cell(cx + 1);
         }
-        cx = (uint8_t)(cx - w);
-        cy++;
+        cx = world_wrap_cell(cx - w);
+        cy = world_wrap_cell(cy + 1);
     }
     // pass 3: light map and water-animation bit over the rectangle + 1
-    w++; h++;
+    w = world_wrap_cell(w + 1); h = world_wrap_cell(h + 1);
     cx = x0; cy = y0;
-    for (uint8_t r = h; r != 0; r--) {
-        for (uint8_t c = w; c != 0; c--) {
+    for (int r = h; r != 0; r--) {
+        for (int c = w; c != 0; c--) {
             int8_t v = light_slope(cx, cy);
             if (v < 0x1c) v = (int8_t)((v & 3) + 0x1c);
             else if (v > 0x28) v = (int8_t)((v & 7) + 0x28);
             unsigned p = cell_xy(cx, cy);
             g_map_light[p] = (uint8_t)v;
             g_map_flags[p] &= 0xf7;
-            cx++;
+            cx = world_wrap_cell(cx + 1);
         }
-        cx = (uint8_t)(cx - w);
-        cy++;
+        cx = world_wrap_cell(cx - w);
+        cy = world_wrap_cell(cy + 1);
     }
 }
 
-void terrain_retexture_rect(unsigned c0, unsigned c1)       { retexture_rect(c0 & 0xffff, c1 & 0xffff, false); }
-void terrain_retexture_rect_force(unsigned c0, unsigned c1) { retexture_rect(c0 & 0xffff, c1 & 0xffff, true); }
+void terrain_retexture_rect(unsigned c0, unsigned c1)       { retexture_rect(cell_wrap(c0), cell_wrap(c1), false); }
+void terrain_retexture_rect_force(unsigned c0, unsigned c1) { retexture_rect(cell_wrap(c0), cell_wrap(c1), true); }
 
 // ---- per-cell height modifiers ------------------------------------------------------------------
 
 // terrain_cell_is_nonland_3d5f0
 int terrain_cell_is_nonland(unsigned cell) {
-    uint8_t c = g_map_flags[cell & 0xffff] & 7;
+    uint8_t c = g_map_flags[cell_wrap(cell)] & 7;
     return (c == 5 || c == 2 || c == 3) ? 0 : 1;
 }
 
 // Shared tail of 3d620 / 3d7d0 for a cell that went down to height 0: the class nibble is cleared
 // (water) only when none of the 8 neighbours is a land class; otherwise the flags stay as they are.
 static void clear_class_if_surrounded(unsigned cell) {
-    uint8_t x = (uint8_t)cell, y = (uint8_t)(cell >> 8);
+    const int x = world_cell_x(cell), y = world_cell_y(cell);
     static const int8_t order[8][2] = { {-1,-1}, {0,-1}, {1,-1}, {1,0}, {-1,0}, {-1,1}, {0,1}, {1,1} };
     for (const auto &o : order)
-        if (!terrain_cell_is_nonland(cell_xy((uint8_t)(x + o[0]), (uint8_t)(y + o[1])))) return;
+        if (!terrain_cell_is_nonland(cell_xy(x + o[0], y + o[1]))) return;
     g_map_flags[cell] &= 0xf0;
 }
 
-// terrain_modify_cell_3d620
+// terrain_modify_cell_3d620. x / y are cell coordinates (wrapped here). `origin` is the original's test of
+// the *argument* (0, 0), i.e. world cell (0, 0) for the spiral callers, whose arguments stay within
+// -N/2 - 16 .. N/2 + 16 (spiral_origin), so the int16 test means the same on any N <= 4096.
 int terrain_modify_cell(int x, int y, int delta, int keep_built) {
-    unsigned cell = cell_xy((uint8_t)x, (uint8_t)y);
+    unsigned cell = cell_xy(x, y);
     bool origin = (int16_t)x == 0 && (int16_t)y == 0;
     int result = 0;
     int16_t h = (int16_t)(g_map_height[cell] + delta);
@@ -319,7 +327,7 @@ int terrain_modify_cell(int x, int y, int delta, int keep_built) {
 
 // terrain_set_cell_height_3d7d0
 int terrain_set_cell_height(int x, int y, int height) {
-    unsigned cell = cell_xy((uint8_t)x, (uint8_t)y);
+    unsigned cell = cell_xy(x, y);
     bool origin = (int16_t)x == 0 && (int16_t)y == 0;
     int result = 0;
     int16_t h = (int16_t)height;
@@ -334,9 +342,11 @@ int terrain_set_cell_height(int x, int y, int height) {
 }
 
 // Centre cell and ring limit shared by 3d940 / 23f20: cell = (pos + 0x80) >> 8, limit = ext_x / 256.
+// The centre is the signed coordinate's cell (-N/2 .. N/2 - 1; the original's (int16_t) word at N = 256);
+// terrain_modify_cell wraps centre + offset onto the world.
 static void spiral_origin(const Thing *t, int *cx, int *cy, int *ring1) {
-    *cx = ((int16_t)t->x + 0x80) >> 8;
-    *cy = ((int16_t)t->y + 0x80) >> 8;
+    *cx = (world_signed(t->x) + 0x80) >> 8;
+    *cy = (world_signed(t->y) + 0x80) >> 8;
     int limit = t->ext_x / 256;
     if ((int16_t)*ring1 > limit) *ring1 = limit;
     *ring1 = (int16_t)*ring1;

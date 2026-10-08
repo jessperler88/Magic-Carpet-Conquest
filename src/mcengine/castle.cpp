@@ -38,14 +38,18 @@ void castle_update_none(Thing *) {}
 
 // castle_find_free_mana_ball_41290(from, excl_a, excl_b)
 Thing *castle_find_free_mana_ball(const Thing *from, const Thing *excl_a, const Thing *excl_b) {
-    uint32_t best = 0xffffffffu;
+    // Round 11: the original compares the int32 square unsigned (a wrapped negative square at 128 cells is
+    // "far"); in a wider world the int64 square is exact and compared as it is.
+    const bool wide = world_wide();
+    uint64_t best = wide ? UINT64_MAX : 0xffffffffu;
     Thing *found = nullptr;
     for (uint32_t i = g_cfg->mana_ball_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
         Thing *b = thing_at(i);
         if (b->type != 0x27) continue;
         if ((int32_t)b->mana_owner != (int32_t)(int16_t)from->owner) continue;   // zero- vs sign-extended
         if (b == excl_a || b == excl_b) continue;
-        uint32_t d = (uint32_t)pos_dist_sq_xyz(thing_pos(from), thing_pos(b));
+        const int64_t sq = pos_dist_sq_xyz(thing_pos(from), thing_pos(b));
+        const uint64_t d = wide ? (uint64_t)sq : (uint64_t)(uint32_t)sq;
         if (d < best) {                                  // jae: unsigned
             found = b;
             best = d;
@@ -220,8 +224,8 @@ void castle_manage_balloons_and_guards(Thing *t) {
         gt->yaw = 0x200;
         gt->target_yaw = gt->yaw;
         g_pos_scratch = *thing_pos(gt);
-        g_pos_scratch.x = (uint16_t)(g_pos_scratch.x + 0x80);
-        g_pos_scratch.y = (uint16_t)(g_pos_scratch.y + 0x280);
+        g_pos_scratch.x = g_pos_scratch.x + 0x80;              // WCoord wraps (the original's u16 store)
+        g_pos_scratch.y = g_pos_scratch.y + 0x280;
         g_pos_scratch.z = (int16_t)terrain_height_at(&g_pos_scratch);
         thing_move_to(gt, &g_pos_scratch);
     }

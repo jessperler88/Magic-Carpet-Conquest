@@ -22,16 +22,22 @@ inline bool think_now(const Thing *t) {
     return period != 0 && (int)t->tick % period == 0;
 }
 
-inline uint32_t dist_sq_xy16(const Thing *a, const Thing *b) {
-    int32_t dx = (int16_t)(a->x - b->x);
-    int32_t dy = (int16_t)(a->y - b->y);
-    return (uint32_t)(dx * dx) + (uint32_t)(dy * dy);
+// Unsigned squared xy distance of the torus differences (the original's uint32 sum of the 16-bit
+// wrapped differences, at most 2^31: the same value with 256 cells; 64-bit for a wider world).
+inline uint64_t dist_sq_xy16(const Thing *a, const Thing *b) {
+    int64_t dx = world_signed(a->x - b->x);
+    int64_t dy = world_signed(a->y - b->y);
+    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
 }
 
-inline uint32_t sight_sq(const Thing *t) {
+inline uint64_t sight_sq(const Thing *t) {
     int32_t s = (int16_t)desc_of(t)->sight_radius;
     return (uint32_t)(s * s);
 }
+
+// The original's 0xffffffff "no limit / none yet" (no 256-world distance reaches it); 64-bit maximum so
+// that a wider world's far candidates (beyond 256 cells: > 2^32) still count.
+constexpr uint64_t kFarSq = ~(uint64_t)0;
 
 // sound_request_49720((int16)thing index, -1, id)
 inline void creature_sound(const Thing *t, int id) { sound_request((int16_t)thing_index(t), -1, id); }
@@ -39,13 +45,13 @@ inline void creature_sound(const Thing *t, int id) { sound_request((int16_t)thin
 // Nearest thing of a Config list within `limit` (squared xy distance, unsigned compares; the first
 // of equally near ones wins). `accept` filters candidates before the distance test.
 template <typename F>
-Thing *nearest_in_list(uint32_t head, const Thing *t, uint32_t limit, F accept) {
-    uint32_t best_d = 0xffffffffu;
+Thing *nearest_in_list(uint32_t head, const Thing *t, uint64_t limit, F accept) {
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = head; i != 0; i = thing_at(i)->next) {
         Thing *o = thing_at(i);
         if (!accept(o)) continue;
-        uint32_t d = dist_sq_xy16(o, t);
+        uint64_t d = dist_sq_xy16(o, t);
         if (d > limit) continue;
         if (d >= best_d) continue;
         best = o;
@@ -257,13 +263,13 @@ void creature_archer_s25_update(Thing *t) {
         if (period4 == 0 || (int)t->tick % period4 != 0) break;
         // nearest player-list thing in sight and in the field of view; it only counts when it is a
         // wanted wizard
-        uint32_t limit = sight_sq(t);
+        uint64_t limit = sight_sq(t);
         int fov = (int16_t)desc_of(t)->fov;
-        uint32_t best_d = 0xffffffffu;
+        uint64_t best_d = kFarSq;
         Thing *enemy = nullptr;
         for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
             Thing *p = thing_at(i);
-            uint32_t d = dist_sq_xy16(p, t);
+            uint64_t d = dist_sq_xy16(p, t);
             if (d > limit) continue;
             if (p->flags & 0x20) continue;
             int ang = pos_angle_to(thing_pos(t), thing_pos(p)) & 0xffff;
@@ -282,12 +288,12 @@ void creature_archer_s25_update(Thing *t) {
             break;
         }
         // a flock leader, as creature_ai_step does
-        best_d = 0xffffffffu;
+        best_d = kFarSq;
         Thing *leader = nullptr;
         for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
             Thing *o = thing_at(i);
             if (o->parent != 0 || o == t) continue;
-            uint32_t d = dist_sq_xy16(o, t);
+            uint64_t d = dist_sq_xy16(o, t);
             if (d > limit) continue;
             int ang = pos_angle_to(thing_pos(t), thing_pos(o)) & 0xffff;
             if ((angle_diff(t->yaw, ang) & 0xffff) >= fov) continue;
@@ -427,7 +433,7 @@ void skeleton_wander(Thing *t, int base) {
 
     // nearest castle of another owner anywhere on the map: walk toward it, attack inside
     // sight radius + castle half width
-    Thing *castle = nearest_in_list(g_cfg->player_list, t, 0xffffffffu,
+    Thing *castle = nearest_in_list(g_cfg->player_list, t, kFarSq,
                                     [t](const Thing *p) { return p->type == 2 && p->owner != t->owner; });
     if (castle) {
         t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(castle));
@@ -443,14 +449,14 @@ void skeleton_wander(Thing *t, int base) {
 
     if (t->timer_a != 0) {
         // any player-list thing of another owner in sight and in the field of view
-        uint32_t limit = sight_sq(t);
+        uint64_t limit = sight_sq(t);
         int fov = (int16_t)desc_of(t)->fov;
-        uint32_t best_d = 0xffffffffu;
+        uint64_t best_d = kFarSq;
         Thing *best = nullptr;
         for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
             Thing *p = thing_at(i);
             if (p->owner == t->owner) continue;
-            uint32_t d = dist_sq_xy16(p, t);
+            uint64_t d = dist_sq_xy16(p, t);
             if (d > limit) continue;
             if (p->flags & 0x20) continue;
             int ang = pos_angle_to(thing_pos(t), thing_pos(p)) & 0xffff;
@@ -663,39 +669,40 @@ void creature_builder_s72_update(Thing *t) {
             uint16_t ext_x, ext_y;
             castle_size_half_extents(size, &ext_x, &ext_y);
             auto rnd3 = [t]() { t->rng = mc_lcg(t->rng); return (int)(t->rng % 3u); };
+            // (the original's 16-bit sums; the WCoord stores wrap them at the world's width)
             switch ((uint16_t)attempt) {        // jump table 0x1d524
             case 0: {
                 int a = rnd3();
-                g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + ((int)ext_x + wizard->ext_x + (a << 8) + 0x100));
+                g_pos_scratch.x = g_pos_scratch.x + ((int)ext_x + wizard->ext_x + (a << 8) + 0x100);
                 int b = rnd3();
-                g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + ((b << 8) - 0x500));
+                g_pos_scratch.y = g_pos_scratch.y + ((b << 8) - 0x500);
                 break;
             }
             case 1: {
                 int a = rnd3();
-                g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x - ((int)ext_x + wizard->ext_x + (a << 8) + 0x100));
+                g_pos_scratch.x = g_pos_scratch.x - ((int)ext_x + wizard->ext_x + (a << 8) + 0x100);
                 int b = rnd3();
-                g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + ((b << 8) - 0x500));
+                g_pos_scratch.y = g_pos_scratch.y + ((b << 8) - 0x500);
                 break;
             }
             case 2: {
                 int a = rnd3();
-                g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + ((a << 8) - 0x500));
+                g_pos_scratch.x = g_pos_scratch.x + ((a << 8) - 0x500);
                 int b = rnd3();
-                g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + ((int)ext_y + wizard->ext_y + (b << 8) + 0x100));
+                g_pos_scratch.y = g_pos_scratch.y + ((int)ext_y + wizard->ext_y + (b << 8) + 0x100);
                 break;
             }
             case 3: {
                 int a = rnd3();
-                g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + ((a << 8) - 0x500));
+                g_pos_scratch.x = g_pos_scratch.x + ((a << 8) - 0x500);
                 int b = rnd3();
-                g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y - ((int)wizard->ext_y + ext_y + (b << 8) + 0x100));
+                g_pos_scratch.y = g_pos_scratch.y - ((int)wizard->ext_y + ext_y + (b << 8) + 0x100);
                 break;
             }
             default:
                 break;                          // negative aux: the wizard's own position
             }
-            uint16_t sx = g_pos_scratch.x, sy = g_pos_scratch.y;
+            const int32_t sx = g_pos_scratch.x, sy = g_pos_scratch.y;
             if (terrain_type_mask_at(&g_pos_scratch) == 1) {
                 t->aux = 2;
                 give_up = true;
@@ -703,10 +710,10 @@ void creature_builder_s72_update(Thing *t) {
                 unsigned max_diff = ((ext_x >> 7) + (ext_y >> 7) > 4 ? 1u : 0u) + 0xf;
                 if (!terrain_rect_is_flat(&g_pos_scratch, ext_x >> 8, ext_y >> 8, max_diff)) return;
                 auto touches = [&](const Thing *o) {
-                    int dx = (int16_t)(o->x - sx);
+                    int dx = world_signed(o->x - sx);
                     if (dx < 0) dx = -dx;
                     if (dx > (int)ext_x + o->ext_x) return false;
-                    int dy = (int16_t)(o->y - sy);
+                    int dy = world_signed(o->y - sy);
                     if (dy < 0) dy = -dy;
                     return dy <= (int)o->ext_y + ext_y;
                 };
@@ -757,11 +764,11 @@ void villager_walk_to_wizard(Thing *t, int base, uint32_t min_dist_sq) {
     if (!think_now(t)) return;
     if (t->target == 0) {
         creature_wander_turn(t);
-        uint32_t best_d = 0xffffffffu;
+        uint64_t best_d = kFarSq;
         Thing *best = nullptr;
         for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) {
             Thing *w = thing_at(i);
-            uint32_t d = dist_sq_xy16(w, t);
+            uint64_t d = dist_sq_xy16(w, t);
             if (d >= best_d) continue;
             if (min_dist_sq != 0 && d <= min_dist_sq) continue;
             best = w;
@@ -855,10 +862,10 @@ void skeleton_convert_villager(Thing *t) {
     if (!think_now(t)) return;
     Thing *victim = skeleton_find_villager(t);
     if (!victim) return;
-    int32_t dx = (int16_t)(victim->x - t->x);
-    int32_t dy = (int16_t)(victim->y - t->y);
+    int32_t dx = world_signed(victim->x - t->x);
+    int32_t dy = world_signed(victim->y - t->y);
     int32_t dz = (int16_t)(victim->z - t->z);
-    if (mc_isqrt((uint32_t)(dx * dx + dy * dy + dz * dz)) > 0x600u) return;
+    if (world_isqrt(world_dist_sq3(dx, dy, dz)) > 0x600u) return;
     g_pos_scratch = *thing_pos(victim);
     thing_mark_delete(victim);
     Thing *n = thing_create(&g_pos_scratch, 5, 9);
@@ -867,10 +874,11 @@ void skeleton_convert_villager(Thing *t) {
 
 // terrain_rect_is_flat_1d420
 int terrain_rect_is_flat(const Pos *pos, unsigned w, unsigned h, unsigned max_diff) {
-    uint8_t x = (uint8_t)(pos->x >> 8), y = (uint8_t)(pos->y >> 8);
-    x = (uint8_t)(x - ((w & 0xffff) >> 1));
-    y = (uint8_t)(y - ((h & 0xffff) >> 1));
-    if (((unsigned)x + y) % 2 != 0) x++;
+    // (cell coordinates wrap at the world's width; the original's uint8_t arithmetic with 256 cells)
+    int x = world_cx(pos->x), y = world_cx(pos->y);
+    x = world_wrap_cell(x - (int)((w & 0xffff) >> 1));
+    y = world_wrap_cell(y - (int)((h & 0xffff) >> 1));
+    if (((unsigned)x + (unsigned)y) % 2 != 0) x = world_wrap_cell(x + 1);
     int range = (int16_t)terrain_rect_height_range(x, y, (int)(h & 0xffff), (int)(w & 0xffff));
     return range < (int)(max_diff & 0xffff) ? 1 : 0;
 }

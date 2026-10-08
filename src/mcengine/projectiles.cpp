@@ -423,8 +423,9 @@ void projectile_lightning_update(Thing *t) {
             t->rng = mc_lcg(t->rng);
             off_a = (int16_t)off_a + ((int32_t)(t->rng % 0x9d) / 0x4f * 2 - 1);
         }
-        g_pos_scratch.x = (uint16_t)(g_pos_scratch.x + delta.x);
-        g_pos_scratch.y = (uint16_t)(g_pos_scratch.y + delta.y);
+        // (delta.x / .y are wrapped offsets: the 16-bit sum of the original, WCoord wraps at the width)
+        g_pos_scratch.x = g_pos_scratch.x + delta.x;
+        g_pos_scratch.y = g_pos_scratch.y + delta.y;
         g_pos_scratch.z = (int16_t)(g_pos_scratch.z + delta.z);
         int32_t wander = (int16_t)step / 4 * (int16_t)off_b;
         seg = g_pos_scratch;

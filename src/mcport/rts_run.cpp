@@ -112,7 +112,11 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
         }
         else { *err = std::string("unknown rts option ") + a; return false; }
     }
-    if (p.world_size != 256) { *err = "only --size 256 until round 11"; return false; }
+    // round 11: 256 .. 4096, a power of two; > 256 = the template map tiled (mode_level.h) until session 2
+    if (p.world_size < 256 || p.world_size > 4096 || (p.world_size & (p.world_size - 1))) {
+        *err = "--size takes a power of two 256..4096";
+        return false;
+    }
     if (p.map != 0 && (p.map < 50 || p.map > 69)) { *err = "--map takes a multiplayer level 50..69"; return false; }
     if (p.bots > 7) p.bots = 7;
     *out = p;

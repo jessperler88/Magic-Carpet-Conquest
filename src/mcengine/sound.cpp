@@ -117,7 +117,10 @@ static bool locate(int thing, int *volume, int *pan, uint16_t *owner) {
     const Thing *t = thing_at((unsigned)idx);
     if (t->flags & 0x80) return false;
     const Thing *listener = thing_at(thing_wrap(g_state->players[g_state->local_player].thing));
-    if (pos_dist_sq_xy(thing_pos(listener), thing_pos(t)) > 0x9000000) return false;   // 48 cells
+    // 48 cells. Round 11: pos_dist_sq_xy is int64 (the original's int32 wrap in a 256-cell world, thing.h),
+    // so a source 128+ cells away in a wider world is culled instead of wrapping negative; past the cull
+    // dist <= 0x3000 and the volume / pan arithmetic below stays in int32.
+    if (pos_dist_sq_xy(thing_pos(listener), thing_pos(t)) > 0x9000000) return false;
     *owner = t->owner;
     int dist  = pos_dist_xy(thing_pos(listener), thing_pos(t));
     int angle = pos_angle_to(thing_pos(listener), thing_pos(t)) & 0xffff;

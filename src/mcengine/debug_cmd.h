@@ -16,13 +16,20 @@
 // playback and on every peer). Unused bytes are 0.
 //
 //   id    name       b1        b2                 b3..b9
-//   0x40  teleport   target    flags: 1 = z given  b3-4 x, b5-6 y (world units), b7-8 z (world units, signed)
+//   0x40  teleport   target    flags: 1 = z given  b3-4 x, b5-6 y (world units, low 16 bits), b7-8 z (world
+//                                                  units, signed), b9 = bits 16..19 of x (low nibble) and of
+//                                                  y (high nibble)
 //                                                  - without z: ground height + 0x100 (the spawn height)
-//   0x41  spawn      class     type (model)       b3 x cell, b4 y cell, b5 count (0 = 1, max 64), b6 flags
-//                                                  (1 = at the cell b3/b4, else b8 cells in front of the
-//                                                  target's wizard), b7 target, b8 distance ahead (0 = 4)
+//   0x41  spawn      class     type (model)       b3 x cell, b4 y cell (low 8 bits), b5 count (0 = 1, max 64),
+//                                                  b6 flags (1 = at the cell b3/b4, else b8 cells in front of
+//                                                  the target's wizard), b7 target, b8 distance ahead (0 = 4),
+//                                                  b9 = bits 8..11 of the x cell (low nibble) / y cell (high)
 //                                                  - level_spawn_thing_record at the cell centre (as a level
 //                                                  file record with dis_id 0); several Things in a square
+// Round 11 (wide worlds, world.h): a world has at most MC_WORLD_MAX = 4096 cells = 2^20 units per side, so a
+// position needs 20 bits per axis: x and y (40 bits) + z (16) are exactly the 7 data bytes b3..b9. The extra
+// nibbles live in b9, which was 0 in every packet before (a 256-cell world: still 0, the packet is unchanged);
+// the coordinates are wrapped onto the world when applied (WCoord / world_wrap_cell).
 //   0x42  give mana  target    0 wizard, 1 castle, b3-6 amount (int32). wizard: Thing.mana += n (at most
 //                              2 mana ball       mana_total); castle: castle Thing.mana += n (at most its
 //                                                  mana_total); ball: cheat 2 - a mana ball of n owned by the

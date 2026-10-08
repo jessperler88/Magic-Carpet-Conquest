@@ -498,8 +498,8 @@ void player_flyer_move(Thing *t) {
         P->knock_speed = (int16_t)(P->knock_speed + k_knock_decay * isign(P->knock_speed));
         if (iabs(P->knock_speed) < 4) P->knock_speed = 0;
     }
-    g_pos_scratch.x = (uint16_t)(g_pos_scratch.x + P->push_x);
-    g_pos_scratch.y = (uint16_t)(g_pos_scratch.y + P->push_y);
+    g_pos_scratch.x = g_pos_scratch.x + P->push_x;                  // round 11: WCoord wraps (was (uint16_t))
+    g_pos_scratch.y = g_pos_scratch.y + P->push_y;
     g_pos_scratch.z = (int16_t)(g_pos_scratch.z + P->push_z);
     P->push_x = 0;
     P->push_y = 0;
@@ -813,9 +813,10 @@ void player_dying_update(Thing *t) {
         s->state++;                                      // the dropped-spell phase
         g_pos_scratch = *thing_pos(t);
         t->rng = mc_lcg(t->rng);
-        g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + (int)(t->rng & 0x1ff) - 0x100);
+        // round 11: (uint16_t)((int16_t)x + r) -> the WCoord wrap of x + r (identical mod 65536)
+        g_pos_scratch.x = g_pos_scratch.x + (int)(t->rng & 0x1ff) - 0x100;
         t->rng = mc_lcg(t->rng);
-        g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + (int)(t->rng & 0x1ff) - 0x100);
+        g_pos_scratch.y = g_pos_scratch.y + (int)(t->rng & 0x1ff) - 0x100;
         thing_move_to(s, &g_pos_scratch);
         t->rng = mc_lcg(t->rng);
         s->health = (int32_t)(t->rng % 0x5a + 200);

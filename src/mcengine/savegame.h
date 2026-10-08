@@ -81,7 +81,16 @@ bool savegame_save_file(const char *path, const char *name);
 //   chunks: char tag[4], u32 length, data
 //     "GAME" the GameState in the port's form (indices, not the original's pointers), sizeof(GameState)
 //     "CONF" the Config (sizeof(Config)); platform fields are not restored (see savestate_apply)
-//     "MAPS" type, height, light, flags (0x10000 each), cell heads (0x20000), corner table (0x12c2)
+//     "MAPS" type, height, light, flags (0x10000 each), cell heads (0x20000), corner table (0x12c2) - a
+//            256-cell world only
+//     "WRLD" (round 11) a world wider than 256 cells (world.h) instead of MAPS: u32 version 1, u32 size N,
+//            u32 slots (= header thing_slots), type / height / light / flags (N*N each), cell heads (u16 N*N),
+//            corner table (0x12c2), ThingHi[slots] (mc_image.h: the high halves of x / y / home.x / home.y of
+//            every slot, GameState's 1000 then the pool extension), WorldHi (world.h g_world_hi: start
+//            position and camera log high halves). The GAME / POOL chunks keep the original's 16-bit image;
+//            a load sets the world size first (world_set_size), then restores the coordinates with their
+//            high halves. A file with neither MAPS nor WRLD (or both) is refused; a reader older than round
+//            11 refuses a WRLD file (MAPS missing). A MAPS file loads as a 256-cell world (g_world_hi cleared).
 //     "GLOB" the simulation globals outside GameState / Config (g_rng16, AI seed, ...; savegame.cpp)
 //     "CAMP" the campaign record (the 142-byte front-end save record of savegame_capture) + 1 byte
 //            g_fe_game_in_progress: player names, spells found, lobby counters

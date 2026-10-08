@@ -4,6 +4,12 @@
 //
 // Map addressing follows the original: a cell index is (y << 8) | x, neighbours are formed by
 // incrementing / decrementing the two bytes separately, so everything wraps on a 256 x 256 torus.
+// Round 11: the local passes (rivers' trace, flatten, the class passes, holes / spikes / shore quads,
+// textures, water animation, light map, snow) address cells through world.h and run over g_world.cells,
+// so they work on any N x N torus (identical at N = 256). The fractal fill, terrain_generate's
+// normalisation and the river source pick stay the original's 256-cell code (MC_MAP_CELLS, 8-bit
+// coordinates, `rng % 0xffff`); session 2 (B4) replaces them for N > 256, and terrain_build refuses a
+// wider world until then.
 // During generation the low 3 bits of g_map_flags hold the terrain *class* (0 water, 1 cliff edge,
 // 2 interior lowland, 3 flat land, 4 transition, 5 default land, 6 steep), bit 3 is the water
 // animation flag and bits 4-6 the texture rotation code written by terrain_assign_textures.
@@ -13,6 +19,7 @@
 #include "world_set.h"
 #include "world.h"
 #include "gen/terrain_tables.h"
+#include <cstdio>
 #include <cstring>
 
 // DAT_000b58b0: compact corner-class -> {texture, rotation} table, index = c0*0x157 + c1*0x31 + c2*7 + c3.
@@ -21,13 +28,14 @@ uint8_t g_corner_tex_table[2401][2];
 // ---------------------------------------------------------------------------------------------
 // helpers
 
-static inline uint8_t  H(unsigned x, unsigned y) { return g_map_height[mc_cell(x, y)]; }
-static inline uint8_t &HR(unsigned x, unsigned y) { return g_map_height[mc_cell(x, y)]; }
-static inline uint8_t  F(unsigned x, unsigned y) { return g_map_flags[mc_cell(x, y)]; }
-static inline uint8_t &FR(unsigned x, unsigned y) { return g_map_flags[mc_cell(x, y)]; }
-static inline uint8_t  T(unsigned x, unsigned y) { return g_map_type[mc_cell(x, y)]; }
+// Cell (x, y) of the world torus; x / y may be one step outside 0 .. N-1 (world_cell wraps them).
+static inline uint8_t  H(int x, int y) { return g_map_height[world_cell(x, y)]; }
+static inline uint8_t &HR(int x, int y) { return g_map_height[world_cell(x, y)]; }
+static inline uint8_t  F(int x, int y) { return g_map_flags[world_cell(x, y)]; }
+static inline uint8_t  T(int x, int y) { return g_map_type[world_cell(x, y)]; }
 
-// The 16-bit scratch heightfield shared with the cell->thing map (0x10dfb0).
+// The 16-bit scratch heightfield shared with the cell->thing map (0x10dfb0). 256-only: the fractal's
+// 8-bit coordinates address the first 0x10000 entries as a 256 x 256 map.
 static inline int16_t &S(unsigned x, unsigned y) {
     return reinterpret_cast<int16_t *>(g_cell_things)[mc_cell(x, y)];
 }
@@ -92,6 +100,8 @@ static void fractal_diamond_step(uint8_t x, uint8_t y, uint8_t s) {
 // OFF is the start cell, RAISE its initial value; the scratch must be zero on entry (cells are only
 // written while still 0). Eight levels, step 128 .. 1: a full pass of square steps then a full
 // pass of diamond steps per level, both starting at the start cell and wrapping around the map.
+// 256-only (round 11): 8-bit coordinates, eight levels (count * 2s == 256) and 16-bit noise; it fills the
+// first 0x10000 scratch entries as a 256 x 256 map whatever g_world says. Session 2 (B4) generates N > 256.
 void terrain_fractal_fill(uint16_t seed, int off, int raise, int gnarl) {
     uint16_t start = (uint16_t)off;
     reinterpret_cast<int16_t *>(g_cell_things)[start] = (int16_t)(uint16_t)raise;
@@ -119,6 +129,8 @@ void terrain_fractal_fill(uint16_t seed, int off, int raise, int gnarl) {
 
 // terrain_generate_313a0: scale the signed 16-bit scratch so that its maximum maps to 0xc4, clamp
 // to 0..0xc4 into g_map_height and zero the scratch (it becomes the cell->thing map).
+// 256-only (round 11): reads the fractal's 256 x 256 scratch (MC_MAP_CELLS entries) and writes the first
+// MC_MAP_CELLS heights, i.e. the 256-cell world's map. Session 2 (B4) normalises N > 256.
 void terrain_generate() {
     int16_t *map = reinterpret_cast<int16_t *>(g_cell_things);
     int16_t mx = -32000;
@@ -144,17 +156,17 @@ void terrain_generate() {
 // S, SW, W, NW; strict less-than, so the first lowest wins), lowering it to the running minimum
 // height, until the next cell is water (class 0), there is no unvisited neighbour, or height 0 is
 // reached. Every visited cell becomes class 0.
-static void terrain_trace_river(uint16_t cell) {
-    std::memset(g_map_type, 3, MC_MAP_CELLS);
+static void terrain_trace_river(uint32_t cell) {
+    std::memset(g_map_type, 3, g_world.cells);
     uint8_t  cur_h = g_map_height[cell];
-    uint16_t cur   = cell;
-    uint16_t best  = 0;        // stale when no neighbour qualifies (EBX in the original); harmless, see below
+    uint32_t cur   = cell;
+    uint32_t best  = 0;        // stale when no neighbour qualifies (EBX in the original); harmless, see below
     for (;;) {
         g_map_type[cur] = 0;
-        uint8_t x = (uint8_t)cur, y = (uint8_t)(cur >> 8);
+        const int x = world_cell_x(cur), y = world_cell_y(cur);
         uint8_t best_h = 0xff;
-        auto consider = [&](unsigned nx, unsigned ny) {
-            uint16_t n = mc_cell(nx, ny);
+        auto consider = [&](int nx, int ny) {
+            const uint32_t n = world_cell(nx, ny);
             if (g_map_type[n] != 0 && g_map_height[n] < best_h) { best_h = g_map_height[n]; best = n; }
         };
         consider(x, y - 1); consider(x + 1, y - 1); consider(x + 1, y); consider(x + 1, y + 1);
@@ -167,7 +179,7 @@ static void terrain_trace_river(uint16_t cell) {
         cur   = best;
         if (cur_h == 0) break;
     }
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i)
+    for (uint32_t i = 0; i < g_world.cells; ++i)
         if (g_map_type[i] == 0) g_map_flags[i] = 0;
 }
 
@@ -177,14 +189,17 @@ static void terrain_trace_river(uint16_t cell) {
 // Uses g_rng16; the cell is rng % 0xffff (so 0xffff maps to cell 0).
 // Round 5 fix (per-tick reference of level 44: 39 rivers above height 132): the try counter was
 // shared by all rivers, so the port stopped carving early on levels with many high sources.
+// Round 11: the class reset, the trace and the final clear run over the world; the source pick (a cell
+// index rng % 0xffff, 1000 tries) is 256-only - in a wider world it would only reach the first 0xffff
+// cell indices (rows 0 .. 0xffff >> shift). Session 2 (B4) picks sources for N > 256.
 void terrain_carve_rivers(int count, int min_height) {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i)
+    for (uint32_t i = 0; i < g_world.cells; ++i)
         g_map_flags[i] = g_map_height[i] ? 5 : 0;
     while (count > 0) {
         int tries = 1000;
-        uint16_t cell;
+        uint32_t cell;
         for (;;) {
-            cell = (uint16_t)(mc_rng16_next() % 0xffff);
+            cell = (uint16_t)(mc_rng16_next() % 0xffff);   // 256-only (see above)
             uint8_t h = g_map_height[cell];
             if (--tries == 0) goto done;
             if (h <= (uint8_t)min_height) continue;
@@ -195,7 +210,7 @@ void terrain_carve_rivers(int count, int min_height) {
         terrain_trace_river(cell);
     }
 done:
-    std::memset(g_map_type, 0xff, MC_MAP_CELLS);
+    std::memset(g_map_type, 0xff, g_world.cells);
 }
 
 // terrain_flatten_water_quads_31e50: until stable, every 2x2 quad of four class-0 cells with unequal
@@ -204,8 +219,8 @@ void terrain_flatten_water_quads() {
     bool changed;
     do {
         changed = false;
-        for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-            uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+        for (uint32_t i = 0; i < g_world.cells; ++i) {
+            const int x = world_cell_x(i), y = world_cell_y(i);
             int water = (F(x, y) == 0) + (F(x + 1, y) == 0) + (F(x + 1, y + 1) == 0) + (F(x, y + 1) == 0);
             uint8_t h0 = H(x, y), h1 = H(x + 1, y), h2 = H(x + 1, y + 1), h3 = H(x, y + 1);
             uint8_t mn = h0, mx = h0;
@@ -224,9 +239,9 @@ void terrain_flatten_water_quads() {
 // Classification passes
 
 // Height range (max - min) over the 5-cell cross centred on (x,y).
-static int cross_range(uint8_t x, uint8_t y, uint8_t *out_max = nullptr, uint8_t *out_min = nullptr) {
+static int cross_range(int x, int y, uint8_t *out_max = nullptr, uint8_t *out_min = nullptr) {
     uint8_t h = H(x, y), mx = h, mn = h;
-    auto acc = [&](unsigned nx, unsigned ny) { uint8_t v = H(nx, ny); if (v > mx) mx = v; if (v < mn) mn = v; };
+    auto acc = [&](int nx, int ny) { uint8_t v = H(nx, ny); if (v > mx) mx = v; if (v < mn) mn = v; };
     acc(x, y - 1); acc(x + 1, y); acc(x, y + 1); acc(x - 1, y);
     if (out_max) *out_max = mx;
     if (out_min) *out_min = mn;
@@ -234,9 +249,9 @@ static int cross_range(uint8_t x, uint8_t y, uint8_t *out_max = nullptr, uint8_t
 }
 
 // Max / min height over the 3x3 block centred on (x,y).
-static void block_range(uint8_t x, uint8_t y, uint8_t &mx, uint8_t &mn) {
+static void block_range(int x, int y, uint8_t &mx, uint8_t &mn) {
     mx = mn = H(x, y);
-    auto acc = [&](unsigned nx, unsigned ny) { uint8_t v = H(nx, ny); if (v > mx) mx = v; if (v < mn) mn = v; };
+    auto acc = [&](int nx, int ny) { uint8_t v = H(nx, ny); if (v > mx) mx = v; if (v < mn) mn = v; };
     acc(x, y - 1); acc(x + 1, y - 1); acc(x + 1, y); acc(x + 1, y + 1);
     acc(x, y + 1); acc(x - 1, y + 1); acc(x - 1, y); acc(x - 1, y - 1);
 }
@@ -244,19 +259,19 @@ static void block_range(uint8_t x, uint8_t y, uint8_t &mx, uint8_t &mn) {
 // terrain_classify_flat_309f0(threshold): class-5 cells with cross range < threshold become 3,
 // == threshold become 4. Then every 2x2 quad containing both 3 and 5 but no 2 turns its 3s into 4.
 void terrain_classify_flat(int threshold) {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if (g_map_flags[i] != 5) continue;
-        int range = cross_range((uint8_t)i, (uint8_t)(i >> 8));
+        int range = cross_range(world_cell_x(i), world_cell_y(i));
         if (range > threshold) continue;
         g_map_flags[i] = (range == threshold) ? 4 : 3;
     }
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
-        const uint16_t q[4] = { mc_cell(x, y), mc_cell(x + 1, y), mc_cell(x + 1, y + 1), mc_cell(x, y + 1) };
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
+        const uint32_t q[4] = { world_cell(x, y), world_cell(x + 1, y), world_cell(x + 1, y + 1), world_cell(x, y + 1) };
         int c3 = 0, c2 = 0, c5 = 0;
-        for (uint16_t c : q) { c3 += g_map_flags[c] == 3; c2 += g_map_flags[c] == 2; c5 += g_map_flags[c] == 5; }
+        for (uint32_t c : q) { c3 += g_map_flags[c] == 3; c2 += g_map_flags[c] == 2; c5 += g_map_flags[c] == 5; }
         if (c2 == 0 && c3 != 0 && c5 != 0)
-            for (uint16_t c : q) if (g_map_flags[c] == 3) g_map_flags[c] = 4;
+            for (uint32_t c : q) if (g_map_flags[c] == 3) g_map_flags[c] = 4;
     }
 }
 
@@ -264,10 +279,10 @@ void terrain_classify_flat(int threshold) {
 // read again), then any non-water cell whose 3x3 max < max_height and range <= max_range becomes 5.
 // Both arguments are compared as bytes.
 void terrain_mark_lowland(int max_h, int max_range) {
-    std::memcpy(g_map_type, g_map_flags, MC_MAP_CELLS);
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    std::memcpy(g_map_type, g_map_flags, g_world.cells);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         uint8_t mx, mn;
-        block_range((uint8_t)i, (uint8_t)(i >> 8), mx, mn);
+        block_range(world_cell_x(i), world_cell_y(i), mx, mn);
         if (mx < (uint8_t)max_h && (int)mx - (int)mn <= (int)(uint8_t)max_range && g_map_flags[i] != 0)
             g_map_flags[i] = 5;
     }
@@ -277,14 +292,14 @@ void terrain_mark_lowland(int max_h, int max_range) {
 // 4; 3 with 0 -> the 3s become 4; 0 with 5 -> every non-water cell becomes 4. The three rewrites run
 // in that order on the live flags (the counts are taken once).
 void terrain_insert_transitions() {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
-        const uint16_t q[4] = { mc_cell(x, y), mc_cell(x + 1, y), mc_cell(x + 1, y + 1), mc_cell(x, y + 1) };
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
+        const uint32_t q[4] = { world_cell(x, y), world_cell(x + 1, y), world_cell(x + 1, y + 1), world_cell(x, y + 1) };
         int c0 = 0, c5 = 0, c3 = 0;
-        for (uint16_t c : q) { c0 += g_map_flags[c] == 0; c5 += g_map_flags[c] == 5; c3 += g_map_flags[c] == 3; }
-        if (c3 && c5) for (uint16_t c : q) if (g_map_flags[c] == 5) g_map_flags[c] = 4;
-        if (c3 && c0) for (uint16_t c : q) if (g_map_flags[c] == 3) g_map_flags[c] = 4;
-        if (c0 && c5) for (uint16_t c : q) if (g_map_flags[c] != 0) g_map_flags[c] = 4;
+        for (uint32_t c : q) { c0 += g_map_flags[c] == 0; c5 += g_map_flags[c] == 5; c3 += g_map_flags[c] == 3; }
+        if (c3 && c5) for (uint32_t c : q) if (g_map_flags[c] == 5) g_map_flags[c] = 4;
+        if (c3 && c0) for (uint32_t c : q) if (g_map_flags[c] == 3) g_map_flags[c] = 4;
+        if (c0 && c5) for (uint32_t c : q) if (g_map_flags[c] != 0) g_map_flags[c] = 4;
     }
 }
 
@@ -292,13 +307,13 @@ void terrain_insert_transitions() {
 // cell whose 3x3 max < max_height, range <= max_range and whose 8 neighbours are all class 5 or 2
 // becomes 2.
 void terrain_mark_interior(int max_h, int max_range) {
-    std::memcpy(g_map_type, g_map_flags, MC_MAP_CELLS);
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+    std::memcpy(g_map_type, g_map_flags, g_world.cells);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
         uint8_t mx, mn;
         block_range(x, y, mx, mn);
         int c5 = 0, c2 = 0;
-        auto cnt = [&](unsigned nx, unsigned ny) { uint8_t f = F(nx, ny); c5 += f == 5; c2 += f == 2; };
+        auto cnt = [&](int nx, int ny) { uint8_t f = F(nx, ny); c5 += f == 5; c2 += f == 2; };
         cnt(x, y - 1); cnt(x + 1, y - 1); cnt(x + 1, y); cnt(x + 1, y + 1);
         cnt(x, y + 1); cnt(x - 1, y + 1); cnt(x - 1, y); cnt(x - 1, y - 1);
         if (mx < (uint8_t)max_h && (int)mx - (int)mn <= (int)(uint8_t)max_range &&
@@ -313,27 +328,28 @@ void terrain_mark_interior(int max_h, int max_range) {
 // Hidden Worlds (HIDDEN.EXE 0x33570, world_hidden()): steep cells become 1 instead of 6 (class 6 is
 // snow there, terrain_mark_snow) and the second pass, which then selects cells == 1 and writes 1,
 // changes nothing.
-static void steep_to_cliff_edge(unsigned i, uint8_t x, uint8_t y);
+static void steep_to_cliff_edge(uint32_t i);
 
 void terrain_mark_steep(int min_range) {
     const bool hidden = world_hidden();
-    std::memcpy(g_map_type, g_map_flags, MC_MAP_CELLS);
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        int range = cross_range((uint8_t)i, (uint8_t)(i >> 8));
+    std::memcpy(g_map_type, g_map_flags, g_world.cells);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        int range = cross_range(world_cell_x(i), world_cell_y(i));
         if (g_map_flags[i] != 0 && range >= (int)(uint8_t)min_range) g_map_flags[i] = hidden ? 1 : 6;
     }
     if (hidden) return;
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if (g_map_flags[i] != 6) continue;
-        steep_to_cliff_edge(i, (uint8_t)i, (uint8_t)(i >> 8));
+        steep_to_cliff_edge(i);
     }
 }
 
 // The second pass of terrain_mark_steep_31ad0 (and of Hidden Worlds' terrain_mark_snow) for one class-6
 // cell: it becomes 1 when its 8 neighbours mix classes.
-static void steep_to_cliff_edge(unsigned i, uint8_t x, uint8_t y) {
+static void steep_to_cliff_edge(uint32_t i) {
+    const int x = world_cell_x(i), y = world_cell_y(i);
     int c3 = 0, c2 = 0, c5 = 0, c4 = 0;
-    auto cnt = [&](unsigned nx, unsigned ny) { uint8_t f = F(nx, ny); c3 += f == 3; c2 += f == 2; c5 += f == 5; c4 += f == 4; };
+    auto cnt = [&](int nx, int ny) { uint8_t f = F(nx, ny); c3 += f == 3; c2 += f == 2; c5 += f == 5; c4 += f == 4; };
     cnt(x, y - 1); cnt(x + 1, y - 1); cnt(x + 1, y); cnt(x + 1, y + 1);
     cnt(x, y + 1); cnt(x - 1, y + 1); cnt(x - 1, y); cnt(x - 1, y - 1);
     bool set;
@@ -347,23 +363,23 @@ static void steep_to_cliff_edge(unsigned i, uint8_t x, uint8_t y) {
 // whose neighbours mix classes become 1, with terrain_mark_steep's rule. No RNG. The copy into
 // g_map_type is dead (cleared two calls later) but kept as the original does it.
 void terrain_mark_snow(int snlin, int snflt) {
-    std::memcpy(g_map_type, g_map_flags, MC_MAP_CELLS);
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    std::memcpy(g_map_type, g_map_flags, g_world.cells);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if (g_map_height[i] <= (uint8_t)snlin) continue;
-        int range = cross_range((uint8_t)i, (uint8_t)(i >> 8));
+        int range = cross_range(world_cell_x(i), world_cell_y(i));
         if (g_map_flags[i] != 0 && range < (int)(uint8_t)snflt) g_map_flags[i] = 6;
     }
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if (g_map_flags[i] != 6) continue;
-        steep_to_cliff_edge(i, (uint8_t)i, (uint8_t)(i >> 8));
+        steep_to_cliff_edge(i);
     }
 }
 
 // terrain_flags_fill_holes_308f0: if the north neighbour's class is non-zero and equal to the other 7
 // neighbours, the centre takes it (removes single-cell holes).
 void terrain_flags_fill_holes() {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
         uint8_t n = F(x, y - 1);
         if (n == 0) continue;
         int same = (n == F(x + 1, y - 1)) + (n == F(x + 1, y)) + (n == F(x + 1, y + 1)) + (n == F(x, y + 1)) +
@@ -379,12 +395,12 @@ void terrain_flags_fill_holes() {
 // average of the 8 neighbours. A cell more than 4 above the min (spike) or more than 4 below the max
 // (pit) becomes the average when the excess is > 10, else (h + avg) / 2.
 void terrain_smooth_spikes() {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if ((g_map_flags[i] & 7) == 0) continue;
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+        const int x = world_cell_x(i), y = world_cell_y(i);
         uint8_t h = g_map_height[i], mx = h, mn = h;
         unsigned sum = 0;
-        auto acc = [&](unsigned nx, unsigned ny) { uint8_t v = H(nx, ny); sum += v; if (v > mx) mx = v; if (v < mn) mn = v; };
+        auto acc = [&](int nx, int ny) { uint8_t v = H(nx, ny); sum += v; if (v > mx) mx = v; if (v < mn) mn = v; };
         acc(x, y - 1); acc(x + 1, y - 1); acc(x + 1, y); acc(x + 1, y + 1);
         acc(x, y + 1); acc(x - 1, y + 1); acc(x - 1, y); acc(x - 1, y - 1);
         unsigned avg = sum >> 3;
@@ -403,11 +419,11 @@ void terrain_smooth_spikes() {
 // class-0 and a class-4 cell and the minimum of (x,y) and the class-0 cells is 0, all four heights
 // become 0.
 void terrain_fix_shore_quads() {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
         uint8_t mn = g_map_height[i];
         int water = 0, trans = 0;
-        auto look = [&](unsigned nx, unsigned ny) {
+        auto look = [&](int nx, int ny) {
             uint8_t f = F(nx, ny);
             if (f == 0) { ++water; uint8_t v = H(nx, ny); if (v < mn) mn = v; }
             else if (f == 4) ++trans;
@@ -466,9 +482,9 @@ void terrain_assign_textures() {
                     if (b[0]) { g_corner_tex_table[key][0] = b[1]; g_corner_tex_table[key][1] = b[0xd]; }
                     else      { g_corner_tex_table[key][0] = 1;    g_corner_tex_table[key][1] = 0; }
                 }
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         if (g_map_type[i] != 0) continue;
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+        const int x = world_cell_x(i), y = world_cell_y(i);
         int key = tex_key(F(x, y) & 7, F(x + 1, y) & 7, F(x + 1, y + 1) & 7, F(x, y + 1) & 7);
         const uint8_t *b = s_buckets + key * kBucketSize;
         uint8_t n = b[0];
@@ -484,10 +500,10 @@ void terrain_assign_textures() {
 // neighbours are height 0 and whose 4 surrounding quads (x,y), (x-1,y), (x-1,y-1), (x,y-1) have
 // texture 0.
 void terrain_mark_water_anim() {
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
         g_map_flags[i] &= 0xf7;
         if (g_map_height[i] != 0) continue;
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+        const int x = world_cell_x(i), y = world_cell_y(i);
         int nz = (H(x, y - 1) != 0) + (H(x + 1, y - 1) != 0) + (H(x + 1, y) != 0) + (H(x + 1, y + 1) != 0) +
                  (H(x, y + 1) != 0) + (H(x - 1, y + 1) != 0) + (H(x - 1, y) != 0) + (H(x - 1, y - 1) != 0);
         if (nz) continue;
@@ -502,8 +518,8 @@ void terrain_mark_water_anim() {
 // (v & 7) + 0x28.
 void terrain_build_lightmap() {
     g_rng16 = 0;
-    for (unsigned i = 0; i < MC_MAP_CELLS; ++i) {
-        uint8_t x = (uint8_t)i, y = (uint8_t)(i >> 8);
+    for (uint32_t i = 0; i < g_world.cells; ++i) {
+        const int x = world_cell_x(i), y = world_cell_y(i);
         uint8_t v = (uint8_t)(0x20 - (uint8_t)(H(x + 1, y + 1) - H(x - 1, y - 1)));
         if (v == 0x20)               v = (uint8_t)(mc_rng16_next() % 9 + 0x1c);
         else if ((int8_t)v < 0x1c)   v = (uint8_t)((v & 3) + 0x1c);
@@ -516,6 +532,13 @@ void terrain_build_lightmap() {
 
 // terrain_build_303f0(level header)
 void terrain_build(const GenMap &gen) {
+    // Round 11: the fractal, the normalisation and the river source pick are the original's 256-cell code
+    // (see the file header); generating a wider world from a level header is session 2's (B4). Refuse
+    // instead of half-filling the map. (A level reset sizes the world to 256 first, sim.cpp.)
+    if (world_wide()) {
+        std::fprintf(stderr, "terrain_build: the generator only builds 256-cell worlds yet (world is %d)\n", g_world.size);
+        return;
+    }
     g_rng16       = (uint16_t)gen.seed;
     g_state->rng  = (uint32_t)gen.seed;
     // The original first tries to load the 64 KB cached height map "c:/carpet.cd/save/scanned.rmd"
@@ -524,10 +547,10 @@ void terrain_build(const GenMap &gen) {
     // The fractal relies on a zeroed scratch; the original gets that from the per-level reset and
     // from terrain_generate. Clearing it here makes terrain_build self-contained (no observable
     // difference).
-    std::memset(g_cell_things, 0, sizeof(uint16_t) * MC_MAP_CELLS);
+    std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
     terrain_fractal_fill(g_rng16, (uint16_t)gen.off, (uint16_t)gen.raise, (uint16_t)gen.gnarl);
     terrain_generate();
-    std::memset(g_cell_things, 0, sizeof(uint16_t) * MC_MAP_CELLS);
+    std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
     terrain_carve_rivers(gen.river, (uint16_t)gen.sourc);
     terrain_flatten_water_quads();
     terrain_classify_flat((uint16_t)gen.snflt);
@@ -537,7 +560,7 @@ void terrain_build(const GenMap &gen) {
     terrain_mark_steep((uint16_t)gen.rkste);
     if (world_hidden()) terrain_mark_snow((uint16_t)gen.snlin, (uint16_t)gen.snflt);   // Hidden Worlds
     terrain_flags_fill_holes();
-    std::memset(g_map_type, 0, MC_MAP_CELLS);
+    std::memset(g_map_type, 0, g_world.cells);
     terrain_smooth_spikes();
     terrain_fix_shore_quads();
     terrain_assign_textures();

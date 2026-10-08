@@ -31,6 +31,7 @@
 #include "sprites.h"
 #include "terrain.h"
 #include "thing.h"
+#include "world.h"
 #include "gen/core_tables.h"
 #include "gen/render_tables.h"
 #include "gen/sprites_tables.h"
@@ -225,8 +226,11 @@ inline uint8_t tex_prop(const uint8_t *table, unsigned t) { return t < 164 ? tab
 // ---------------------------------------------------------------------------------------------
 
 constexpr double kNear = 32.0;              // camera-space near plane (world units; 1/8 cell)
-constexpr int    kWin = 128;                // cell offsets -128..127 (one copy of the 256-cell torus)
-constexpr int    kVN = 2 * kWin + 1;        // vertex offsets -128..128
+// The window of cell offsets around the camera: -kWin..kWin-1, at most one copy of the N-cell torus
+// (kWin = min(N / 2, 256), set per frame from g_world: 128 in the original's 256 world, 256 from N = 512 on).
+constexpr int    kWinMax = 256;
+int              kWin = 128;
+int              kVN = 2 * 128 + 1;         // vertex offsets -kWin..kWin
 
 struct Frame {
     int W, H;
@@ -275,13 +279,14 @@ double fog_haze(double d2) {
     return (d2 - F.near2) / (F.far2 - F.near2);
 }
 
-// Vertex at cell-corner offset (i, j) from the camera cell (-128..128).
+// Vertex at cell-corner offset (i, j) from the camera cell (-kWin..kWin).
 const EV &vertex(int i, int j) {
     EV &e = g_vc[(size_t)(j + kWin) * kVN + (i + kWin)];
     if (e.stamp == g_stamp) return e;
     e.stamp = g_stamp;
-    const uint8_t cx = (uint8_t)(F.cam_cx + i), cyc = (uint8_t)(F.cam_cy + j);
-    const uint16_t cell = mc_cell(cx, cyc);
+    // cx * 0x80 below only matters mod 16 cells, so the wave is the same in every 256-cell tile
+    const int cx = world_wrap_cell(F.cam_cx + i), cyc = world_wrap_cell(F.cam_cy + j);
+    const uint32_t cell = world_cell(cx, cyc);
     const double dx = (double)(i * 256 - F.fx), dy = (double)(F.fy - j * 256);
     const double xc = F.cy * dx - F.sy * dy, zc = F.cy * dy + F.sy * dx;
     e.xc = (float)xc; e.zc = (float)zc;
@@ -433,7 +438,7 @@ void count_cells(int i0, int j0, int s) {
     if (!g_render_ext_cell_count) return;
     for (int j = 0; j < s; ++j)
         for (int i = 0; i < s; ++i) {
-            uint8_t &c = g_render_ext_cell_count[mc_cell((uint8_t)(F.cam_cx + i0 + i), (uint8_t)(F.cam_cy + j0 + j))];
+            uint8_t &c = g_render_ext_cell_count[world_cell(F.cam_cx + i0 + i, F.cam_cy + j0 + j)];
             if (c < 255) c++;
         }
 }
@@ -442,8 +447,8 @@ void count_cells(int i0, int j0, int s) {
 void emit_quad(int i0, int j0, int s, bool mirrored) {
     const Resources &R = res();
     const EV &e00 = vertex(i0, j0), &e10 = vertex(i0 + s, j0), &e11 = vertex(i0 + s, j0 + s), &e01 = vertex(i0, j0 + s);
-    const uint8_t cx = (uint8_t)(F.cam_cx + i0), cyc = (uint8_t)(F.cam_cy + j0);
-    const uint16_t cell = mc_cell(cx, cyc);
+    const int cx = world_wrap_cell(F.cam_cx + i0), cyc = world_wrap_cell(F.cam_cy + j0);
+    const uint32_t cell = world_cell(cx, cyc);
     const uint8_t texture = g_map_type[cell];
     if (mirrored && texture == 0) return;
     const double dmx = (i0 * 256.0 + s * 128.0) - F.fx, dmy = (j0 * 256.0 + s * 128.0) - F.fy;
@@ -458,7 +463,7 @@ void emit_quad(int i0, int j0, int s, bool mirrored) {
             int sr = 0, sg = 0, sb = 0;
             for (int j = 0; j < s; ++j)
                 for (int i = 0; i < s; ++i) {
-                    const uint8_t t = g_map_type[mc_cell((uint8_t)(cx + i), (uint8_t)(cyc + j))];
+                    const uint8_t t = g_map_type[world_cell(cx + i, cyc + j)];
                     sr += R.avg_rgb[t][0]; sg += R.avg_rgb[t][1]; sb += R.avg_rgb[t][2];
                 }
             const int n = s * s;
@@ -599,15 +604,19 @@ int32_t thing_shade_level(double d2) {             // DAT_000b5818 with the exte
     return ((int32_t)((F.far2 - d2) * 32.0 / (F.far2 - F.near2))) << 8;
 }
 
-// Thing position with the render-time interpolation (render.h g_render_interp).
+// Thing position with the render-time interpolation (render.h g_render_interp). prev_pos holds the low 16
+// bits of the previous tick's x / y (pacing.cpp): the 16-bit difference to the current position is the
+// tick's movement in any world (a Thing moves far less than 128 cells per tick), so the previous position is
+// the current one minus that difference; with 256 cells this is exactly prev + d * alpha in 16 bits.
 void thing_pos_lerp(unsigned idx, const Thing *t, int32_t &x, int32_t &y, int32_t &z) {
     x = t->x; y = t->y; z = t->z;
     const RenderInterp &ri = g_render_interp;
     if (ri.active && ri.prev_pos && (int)idx < ri.prev_count) {
         const int16_t *p = ri.prev_pos[idx];
         const int64_t a = ri.alpha;
-        x = (uint16_t)((uint16_t)p[0] + (int32_t)(((int64_t)(int16_t)(uint16_t)(t->x - (uint16_t)p[0]) * a) >> 16));
-        y = (uint16_t)((uint16_t)p[1] + (int32_t)(((int64_t)(int16_t)(uint16_t)(t->y - (uint16_t)p[1]) * a) >> 16));
+        const int32_t dx = (int16_t)(uint16_t)(t->x - (uint16_t)p[0]), dy = (int16_t)(uint16_t)(t->y - (uint16_t)p[1]);
+        x = world_wrap(t->x - dx + (int32_t)(((int64_t)dx * a) >> 16));
+        y = world_wrap(t->y - dy + (int32_t)(((int64_t)dy * a) >> 16));
         z = (int32_t)p[2] + (int32_t)(((int64_t)((int32_t)t->z - p[2]) * a) >> 16);
     }
 }
@@ -645,13 +654,13 @@ void thing_pos(unsigned idx, const Thing *t, int32_t &x, int32_t &y, int32_t &z,
     // continue from last frame's position unless this is a new chain / the gap is implausible
     const bool fresh = !(v.parent == t->parent && g_seg_frame - v.frame <= 2);
     if (!fresh) {
-        dx = (int16_t)(uint16_t)(v.x - px); dy = (int16_t)(uint16_t)(v.y - py); dz = v.z - pz;
+        dx = world_signed(v.x - px); dy = world_signed(v.y - py); dz = v.z - pz;
         len = std::sqrt(dx * dx + dy * dy + dz * dz);
     }
     if (fresh || len < 1.0 || len > spacing * 8.0 + 512.0) {
         int32_t sx, sy, sz;                                 // the simulation's (interpolated) position
         thing_pos_lerp(idx, t, sx, sy, sz);
-        dx = (int16_t)(uint16_t)(sx - px); dy = (int16_t)(uint16_t)(sy - py); dz = sz - pz;
+        dx = world_signed(sx - px); dy = world_signed(sy - py); dz = sz - pz;
         len = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (len < spacing * 0.5 || len > spacing * 2.0 + 64.0) {
             // lay the segment out behind its parent's heading (yaw 0 = -y, 0x200 = +x)
@@ -660,8 +669,8 @@ void thing_pos(unsigned idx, const Thing *t, int32_t &x, int32_t &y, int32_t &z,
         }
     }
     const double k = spacing / len;
-    x = (uint16_t)(px + (int32_t)std::lround(dx * k));
-    y = (uint16_t)(py + (int32_t)std::lround(dy * k));
+    x = world_wrap(px + (int32_t)std::lround(dx * k));
+    y = world_wrap(py + (int32_t)std::lround(dy * k));
     z = pz + (int32_t)std::lround(dz * k);
     v = SegView{g_seg_frame, t->parent, x, y, z};
 }
@@ -670,10 +679,10 @@ bool g_ext_anchors = false;                                // render_anchors_wan
 
 // The things of the cell at offset (i, j); `shadow_ok` = the host quad's texture allows shadows.
 void emit_cell_things(int i, int j, bool mirrored) {
-    const uint8_t cx = (uint8_t)(F.cam_cx + i), cyc = (uint8_t)(F.cam_cy + j);
-    unsigned idx = g_cell_things[mc_cell(cx, cyc)];
+    const uint32_t cell = world_cell(F.cam_cx + i, F.cam_cy + j);
+    unsigned idx = g_cell_things[cell];
     if (idx == 0) return;
-    const bool shadow_ok = F.shadows && tex_prop(g_tex_prop_shadow, g_map_type[mc_cell(cx, cyc)]) == 0;
+    const bool shadow_ok = F.shadows && tex_prop(g_tex_prop_shadow, g_map_type[cell]) == 0;
     const int slots = thing_pool_slots();
     int budget = slots;                                          // bounded walk (cell-list cycles)
     while (idx != 0 && idx < (unsigned)slots && budget-- > 0) {
@@ -684,7 +693,7 @@ void emit_cell_things(int i, int j, bool mirrored) {
         g_render_ext_stats.things_seen++;
         int32_t x, y, z;
         thing_pos(this_idx, t, x, y, z);
-        const double dx = (int16_t)(uint16_t)(x - F.cam_x), dy = (int16_t)(uint16_t)(F.cam_y - y);
+        const double dx = world_signed(x - F.cam_x), dy = world_signed(F.cam_y - y);
         const double xc = F.cy * dx - F.sy * dy, zc = F.cy * dy + F.sy * dx;
         const double d2 = xc * xc + zc * zc;
         if (!(zc > 0x40 && d2 < F.cull2)) continue;
@@ -698,7 +707,7 @@ void emit_cell_things(int i, int j, bool mirrored) {
         const double size = (double)(uint16_t)d->half_z * F.focal / zc;
         if (size + 1.0 < F.min_px) continue;
         if (!mirrored && shadow_ok && d->shade_group == 0 && size >= 4.0) {
-            const int32_t ground = terrain_sample_height((uint16_t)x, (uint16_t)y);
+            const int32_t ground = terrain_sample_height(x, y);
             SpritePick p;
             if (!pick_sprite(t, d, true, p)) continue;
             const double h = std::floor(size) / 4.0, w = std::floor(size) * p.w / p.h;
@@ -800,7 +809,7 @@ void draw_level(int L, bool mirrored) {
                             const int vi = ia + (ib - ia) * k / s, vj = ja + (jb - ja) * k / s;
                             lo = std::min(lo, vertex(vi, vj).h);
                         }
-                        emit_skirt(ia, ja, ib, jb, lo - 0x10, res().avg[g_map_type[mc_cell((uint8_t)(F.cam_cx + i0), (uint8_t)(F.cam_cy + j0))]]);
+                        emit_skirt(ia, ja, ib, jb, lo - 0x10, res().avg[g_map_type[world_cell(F.cam_cx + i0, F.cam_cy + j0)]]);
                     }
                 }
             }
@@ -834,7 +843,7 @@ void draw_level(int L, bool mirrored) {
                     const int eb_i = (ia == ib) ? ia : ea_i + 2, eb_j = (ja == jb) ? ja : ea_j + 2;
                     if (ea_i >= -kWin && eb_i <= kWin && ea_j >= -kWin && eb_j <= kWin)
                         lo = std::min({lo, vertex(ea_i, ea_j).h, vertex(eb_i, eb_j).h});
-                    emit_skirt(ia, ja, ib, jb, lo - 0x10, res().avg[g_map_type[mc_cell((uint8_t)(F.cam_cx + i0), (uint8_t)(F.cam_cy + j0))]]);
+                    emit_skirt(ia, ja, ib, jb, lo - 0x10, res().avg[g_map_type[world_cell(F.cam_cx + i0, F.cam_cy + j0)]]);
                 }
             }
             emit_quad(i0, j0, 1, mirrored);
@@ -866,16 +875,16 @@ std::vector<uint8_t> s_prev_frame;                      // motion blur: the prev
 int s_prev_w = 0, s_prev_h = 0;
 
 void slope_camera(Camera &cam) {
-    uint8_t cx = (uint8_t)(cam.cam_x >> 8), cy = (uint8_t)(cam.cam_y >> 8);
+    int cx = world_cx(cam.cam_x), cy = world_cx(cam.cam_y);
     if ((cam.cam_x & 0xff) < 0x80) cx--;
     if ((cam.cam_y & 0xff) < 0x80) cy--;
     if (s_slope_tick != g_anim_tick) {
         s_slope_tick = g_anim_tick;
         s_slope_px = s_slope_x; s_slope_py = s_slope_y;  // previous tick's nudge (interpolation)
-        const int h00 = g_map_height[mc_cell(cx, cy)];
-        const int h20 = g_map_height[mc_cell((uint8_t)(cx + 2), cy)];
-        const int h22 = g_map_height[mc_cell((uint8_t)(cx + 2), (uint8_t)(cy + 2))];
-        const int h02 = g_map_height[mc_cell(cx, (uint8_t)(cy + 2))];
+        const int h00 = g_map_height[world_cell(cx, cy)];
+        const int h20 = g_map_height[world_cell(cx + 2, cy)];
+        const int h22 = g_map_height[world_cell(cx + 2, cy + 2)];
+        const int h02 = g_map_height[world_cell(cx, cy + 2)];
         const int slope_x = std::clamp((h00 - h20 - h22 + h02) * 2, -100, 100);
         const int slope_y = std::clamp((h00 + h20 - h22 - h02) * 2, -100, 100);
         s_slope_x += (slope_x - s_slope_x) >> 3;
@@ -916,9 +925,13 @@ static void render_ext_draw(uint8_t *pix, int pitch, int width, int height, cons
     F.yaw16 = (uint16_t)yaw;
     F.cy = mc_cos(yaw) / 65536.0; F.sy = mc_sin(yaw) / 65536.0;
     F.q = (int)((yaw + 0x100) >> 9) & 3;
-    F.cam_x = (uint16_t)cam.cam_x; F.cam_y = (uint16_t)cam.cam_y; F.cam_z = cam.cam_z;
+    // the window: at most one copy of the torus around the camera (128 cells each way in the 256 world)
+    kWin = std::min(g_world.size / 2, kWinMax);
+    kVN = 2 * kWin + 1;
+    F.cam_x = world_wrap(cam.cam_x); F.cam_y = world_wrap(cam.cam_y); F.cam_z = cam.cam_z;
     F.cam_cx = F.cam_x >> 8; F.cam_cy = F.cam_y >> 8; F.fx = F.cam_x & 0xff; F.fy = F.cam_y & 0xff;
-    const int dd = std::clamp(S.draw_distance, 4, 127);
+    // 4..127 in the 256 world (the settings' range); a wider world's window allows up to 255 (kWin - 1)
+    const int dd = std::clamp(S.draw_distance, 4, kWin - 1);
     F.lod = std::clamp(S.lod, 0, 2);
     // LOD regions: level 0 up to D0 cells, level L up to D0 * 2^L; at most 3 coarser levels (8x8).
     F.levels = 0; F.K = 1;

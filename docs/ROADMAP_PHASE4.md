@@ -182,6 +182,23 @@ The user's control reference is the README ("Where things stand").
 
 Steps B1-B7 and B9 of `phase4_code_world.md` section 7; the RTS renderer (B8) moves to round 16.
 
+**Split over three sessions** (briefing `docs/port/BRIEFING_round11.md`, branch `round11`).
+**Session 1 DONE 2026-10-08** (65/65 ctest, every reference set byte-identical incl. movie 0 full, Hidden Worlds,
+1995 controls, scripted players): `WCoord` int32 positions (wrap on store; exactly u16 at 256), original-layout
+images (`mc_image.h`) for movies / saves / references / checksum, `world.h` (descriptor, pointer maps, accessors,
+int64 distances, `math_atan2_w`, high halves of start positions / camera log, `world_widen_tiled`), and the call-site
+sweep by five agents (reports `docs/analysis/port_world_{terrain,things,creatures,persist,render}.md`): terrain
+passes / features / spatial / effects / creatures / AI quadrants / projectiles / player / debug packets (wide
+teleport in byte 9) / sound / save-state `WRLD` chunk / movie v3 wide snapshots / checksum / renderers (`kWin =
+min(N/2, 256)`, draw distance up to 255 at N >= 512) / HUD / map screen (window around the player) / debug overlays.
+`mcport rts --size 512..4096` runs a **tiled** world (the template map repeated) until the generator lands; two
+runs at 1024 give identical checksums. Sizes are powers of two only (768 dropped: masks everywhere).
+Session 2: B4 + B5 (generator on N, feature placer, `WorldParams`). Session 3: B6 wake-near-any-wizard, `world_test`
+/ `MC_REF_WORLD`, two-process sync at 1024, the gate, plus the open design points the sweep listed (fixed-range
+constants that do not scale: sound cull, tether, teleport gate 128 cells, spiral search 15 rings; world-wide
+searches such as skeletons -> nearest enemy castle; castle-site quadrants growing with N; rivers / source tries
+scaling with area; `draw_distance` max 127 in config / pause menu).
+
 - [ ] B1 world descriptor + accessors (`world.h`: `world_cell`, `world_cell_of`, `world_cell_step`, `cell_x/y`,
       `world_diff`, `world_dist_sq` int64), replacing `mc_cell`, the three `cell_xy` clones, `(uint8_t)`
       neighbour arithmetic and 0x10000 strides in 14 files; maps allocated at level start outside GameState

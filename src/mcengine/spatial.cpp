@@ -29,7 +29,7 @@ inline void slot_hit(Thing *o, int slot, uint32_t amount, uint16_t attacker) {
 // Walk of the things in one cell; `fn` returns true to stop. The chain is at most the pool long.
 template <typename F> inline Thing *walk_cell(unsigned cell, F fn) {
     int guard = 0;
-    for (unsigned i = g_cell_things[cell & 0xffff]; i != 0 && i < (uint32_t)thing_pool_slots() && guard < thing_pool_slots(); guard++) {
+    for (unsigned i = g_cell_things[cell & (g_world.cells - 1)]; i != 0 && i < (uint32_t)thing_pool_slots() && guard < thing_pool_slots(); guard++) {
         Thing *o = thing_at(i);
         unsigned next = o->cell_next;
         if (fn(o)) return o;
@@ -41,13 +41,13 @@ template <typename F> inline Thing *walk_cell(unsigned cell, F fn) {
 // The shared frame of the four spiral searches: rings 0..(ext_x + 0xff) / 256 around the cell of
 // (x + 0x80, y + 0x80).
 template <typename F> Thing *spiral_find(const Thing *t, F match) {
-    int cx = ((int16_t)t->x + 0x80) >> 8;
-    int cy = ((int16_t)t->y + 0x80) >> 8;
+    int cx = (world_signed(t->x) + 0x80) >> 8;
+    int cy = (world_signed(t->y) + 0x80) >> 8;
     SpiralSearch s;
     if (!spiral_search_begin(&s, 0, div256((int16_t)t->ext_x + 0xff))) return nullptr;
     int dx, dy;
     while (spiral_search_next(&s, &dx, &dy) == 1) {
-        unsigned cell = (((unsigned)(cy + dy) & 0xff) << 8) | ((unsigned)(cx + dx) & 0xff);
+        unsigned cell = world_cell(cx + dx, cy + dy);
         if (Thing *hit = walk_cell(cell, match)) return hit;
     }
     return nullptr;
@@ -65,13 +65,16 @@ template <typename F> void for_each_castle(F fn) {
 }
 
 // The slot-0 cell walk shared by the three area functions (cells of (x - 0x80) / 256 +- radius).
+// The idiv truncates toward zero on the signed coordinate: in the upper half of the world (a negative
+// world_signed value) the window centre is one cell further east / south than the floor would give - the
+// original's quirk, kept; with N > 256 it applies to the upper half of the wider world.
 template <typename F> void area_cells_slot0(Thing *t, F hit) {
-    int cx = div256((int16_t)t->x - 0x80);
-    int cy = div256((int16_t)t->y - 0x80);
+    int cx = div256(world_signed(t->x) - 0x80);
+    int cy = div256(world_signed(t->y) - 0x80);
     int r  = div256((int16_t)t->ext_x + 0xff);
     for (int dy = -r; dy <= r; dy++)
         for (int dx = -r; dx <= r; dx++) {
-            unsigned cell = (((unsigned)(cy + dy) & 0xff) << 8) | ((unsigned)(cx + dx) & 0xff);
+            unsigned cell = world_cell(cx + dx, cy + dy);
             walk_cell(cell, [&](Thing *o) {
                 if (o->owner == t->owner) return false;
                 if (!thing_collide(t, o)) return false;
@@ -122,11 +125,11 @@ Thing *thing_find_mana_ball_touching(Thing *t) {
 
 // thing_exists_near_pos_10ac0
 int thing_exists_near_pos(const Pos *pos, int cls, int type) {
-    int cx = ((int16_t)pos->x - 0x80) >> 8;
-    int cy = ((int16_t)pos->y - 0x80) >> 8;
+    int cx = (world_signed(pos->x) - 0x80) >> 8;
+    int cy = (world_signed(pos->y) - 0x80) >> 8;
     for (int dy = 0; dy < 2; dy++)
         for (int dx = 0; dx < 2; dx++) {
-            unsigned cell = (((unsigned)(cy + dy) & 0xff) << 8) | ((unsigned)(cx + dx) & 0xff);
+            unsigned cell = world_cell(cx + dx, cy + dy);
             Thing *hit = walk_cell(cell, [&](Thing *o) {
                 return o->cls == (uint8_t)cls && o->type == (uint8_t)type
                     && (uint32_t)pos_dist_xyz(pos, thing_pos(o)) <= 0x80;
@@ -152,12 +155,12 @@ void thing_area_damage(Thing *t, int slot_in, unsigned amount_in) {
     // Other damage types: cells of (x + 0x80) >> 8 +- radius, any class but 0, type bit in prop_flags.
     if (slot >= 6) return;                    // the original would write past the six slots
     uint16_t bit = (uint16_t)(1u << (slot & 0x1f));
-    int cx = ((int16_t)t->x + 0x80) >> 8;
-    int cy = ((int16_t)t->y + 0x80) >> 8;
+    int cx = (world_signed(t->x) + 0x80) >> 8;
+    int cy = (world_signed(t->y) + 0x80) >> 8;
     int r  = div256((int16_t)t->ext_x + 0xff);
     for (int dy = -r; dy <= r; dy++)
         for (int dx = -r; dx <= r; dx++) {
-            unsigned cell = (((unsigned)(cy + dy) & 0xff) << 8) | ((unsigned)(cx + dx) & 0xff);
+            unsigned cell = world_cell(cx + dx, cy + dy);
             walk_cell(cell, [&](Thing *o) {
                 if (o->owner == t->owner) return false;
                 if (o->cls == 0) return false;
@@ -219,7 +222,7 @@ void thing_try_damage(const Thing *attacker, Thing *victim, int slot_in, unsigne
 // cell_kill_things_3da30
 void cell_kill_things(unsigned cell, unsigned owner_in) {
     uint16_t owner = (uint16_t)owner_in;
-    walk_cell(cell & 0xffff, [&](Thing *o) {
+    walk_cell(cell & (g_world.cells - 1), [&](Thing *o) {
         if ((int)(int16_t)o->owner == (int)owner) return false;
         if (o->cls == 2) {
             thing_mark_delete(o);
@@ -261,13 +264,13 @@ uint32_t creature_check_terrain(const Thing *t, const Pos *pos, unsigned flags) 
 
 // terrain_max_corner_level_10c30
 int terrain_max_corner_level(const Pos *pos) {
-    uint8_t cx = (uint8_t)(pos->x >> 8), cy = (uint8_t)(pos->y >> 8);
-    unsigned m = g_map_height[mc_cell(cx, cy)];
-    unsigned v = g_map_height[mc_cell((uint8_t)(cx + 1), cy)];
+    const int cx = world_cx(pos->x), cy = world_cx(pos->y);
+    unsigned m = g_map_height[world_cell(cx, cy)];
+    unsigned v = g_map_height[world_cell(cx + 1, cy)];
     if (m < v) m = v;
-    v = g_map_height[mc_cell(cx, (uint8_t)(cy + 1))];
+    v = g_map_height[world_cell(cx, cy + 1)];
     if (m < v) m = v;
-    v = g_map_height[mc_cell((uint8_t)(cx + 1), (uint8_t)(cy + 1))];
+    v = g_map_height[world_cell(cx + 1, cy + 1)];
     if (m < v) m = v;
     return (int)m >> 5;
 }

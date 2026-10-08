@@ -5,6 +5,7 @@
 #include "demo.h"
 #include "level.h"
 #include "mc_globals.h"
+#include "world.h"
 #include "ai_wizard.h"
 #include "terrain_paint.h"
 #include "gen/player_tables.h"
@@ -41,6 +42,13 @@ bool level_source(int index, LevelData *out) {
 
 // g_hook_mode_level_start: the level-start work of a mode level that needs the gameplay subsystems.
 void level_start() {
+    // Round 11 (session 1 test bed until the generator on N of session 2): ModeParams.world_size > 256 plays the
+    // template level repeated as an N-cell world (world.h world_widen_tiled: the maps tiled, the Things stay in
+    // the first copy). Runs at the end of level_start_from_state (mode_level_start), after switch_activate and
+    // players_init_records, before the players spawn (their join command in the first tick): the level reset
+    // set the world back to 256 first, so a restart widens again.
+    const uint32_t ws = g_mode.params.world_size;
+    if (ws > 256 && ws <= (uint32_t)MC_WORLD_MAX && !(ws & (ws - 1))) world_widen_tiled((int)ws);
     g_mode.template_level = (uint32_t)mode_template_level(s_game_dir.c_str(), g_mode.params);
     // the AI's crt_rand seed (outside GameState) from the match seed: a mode run never depends on what ran
     // before it in the process (the campaign leaves it wherever its last level left it)

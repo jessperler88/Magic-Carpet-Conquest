@@ -6,6 +6,9 @@
 // write game state), and nothing in the tick reads it. mcport (main.cpp) drives it: the free-camera keys,
 // `cam follow <slot>` (the Thing inspector's follow mode), `cam to x y`.
 //
+// Coordinates (round 11): cam.cam_x / cam_y are world units wrapped into 0 .. g_world.units - 1 (world.h) by
+// whoever moves the camera (main.cpp, debug_inspect_follow_camera); the renderers wrap them again anyway.
+//
 // Header-only (an inline variable) so every target that links hud.cpp links without another source.
 #pragma once
 #include "render.h"   // Camera

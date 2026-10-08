@@ -538,8 +538,8 @@ void level_run_terrain_effects() {
 void level_spawn_thing_record(const ThingInit *rec) {
     if (!thing_table_b_enabled(rec->cls, rec->model)) return;
     Pos pos;
-    pos.x = (uint16_t)(rec->x * 0x100 + 0x80);
-    pos.y = (uint16_t)(rec->y * 0x100 + 0x80);
+    pos.x = rec->x * 0x100 + 0x80;             // round 11: WCoord wraps (the original's u16 store at 256)
+    pos.y = rec->y * 0x100 + 0x80;
     pos.z = (int16_t)terrain_height_at(&pos);
     Thing *t = thing_create(&pos, rec->cls, rec->model);
     if (!t) return;
@@ -560,8 +560,8 @@ void level_spawn_thing_record(const ThingInit *rec) {
         break;
     case 0xa:
         if (t->type == 0x22) {
-            t->home.x = (uint16_t)(rec->child * 0x100 + 0x80);
-            t->home.y = (uint16_t)(rec->parent * 0x100 + 0x80);
+            t->home.x = rec->child * 0x100 + 0x80;
+            t->home.y = rec->parent * 0x100 + 0x80;
         } else if (t->type == 0x2d) {
             if (g_hook_effect_wizard_init) g_hook_effect_wizard_init(t, (rec->parent + 0x10) & 0xffff);
         } else if (t->type == 4) {
@@ -806,8 +806,8 @@ int angle_turn_step(int cur, int target, int /*unused*/, int max_step) {
 
 // math_bbox_overlap_10530: ext = {z offset, half x, half y, half height}
 int math_bbox_overlap(const Pos *pa, const int16_t *ea, const Pos *pb, const int16_t *eb) {
-    if (iabs((int16_t)(pb->x - pa->x)) >= ea[1] + eb[1]) return 0;
-    if (iabs((int16_t)(pb->y - pa->y)) >= ea[2] + eb[2]) return 0;
+    if (iabs(world_signed(pb->x - pa->x)) >= ea[1] + eb[1]) return 0;
+    if (iabs(world_signed(pb->y - pa->y)) >= ea[2] + eb[2]) return 0;
     if (iabs((pa->z + ea[0]) - (pb->z + eb[0])) >= ea[3] + eb[3]) return 0;
     return 1;
 }

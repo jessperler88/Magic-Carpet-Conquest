@@ -24,18 +24,24 @@ inline bool think_now(const Thing *t) {
     return period != 0 && (int)t->tick % period == 0;
 }
 
-// (dx^2 + dy^2) of the 16-bit wrapped coordinate differences, as an unsigned 32-bit value.
-inline uint32_t dist_sq_xy16(const Thing *a, const Thing *b) {
-    int32_t dx = (int16_t)(a->x - b->x);
-    int32_t dy = (int16_t)(a->y - b->y);
-    return (uint32_t)(dx * dx) + (uint32_t)(dy * dy);
+// (dx^2 + dy^2) of the torus-wrapped coordinate differences, unsigned. The original's unsigned 32-bit
+// sum of the 16-bit wrapped differences (at most 2^31, so the same value in 64 bits with 256 cells);
+// round 11: 64-bit for a wider world (world.h).
+inline uint64_t dist_sq_xy16(const Thing *a, const Thing *b) {
+    int64_t dx = world_signed(a->x - b->x);
+    int64_t dy = world_signed(a->y - b->y);
+    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
 }
 
 // (int16)desc.sight_radius squared, as the 32-bit imul leaves it.
-inline uint32_t sight_sq(const Thing *t) {
+inline uint64_t sight_sq(const Thing *t) {
     int32_t s = (int16_t)desc_of(t)->sight_radius;
     return (uint32_t)(s * s);
 }
+
+// "no limit" / "nothing found yet" of the nearest searches: the original's 0xffffffff, which no 256-world
+// distance reaches; a wider world needs the 64-bit maximum (distances beyond 256 cells exceed 2^32).
+constexpr uint64_t kFarSq = ~(uint64_t)0;
 
 // angle_diff(t.yaw, pos_angle_to(t, o)) < (int16)desc.fov
 inline bool in_fov(const Thing *t, const Thing *o) {
@@ -47,13 +53,13 @@ inline bool in_fov(const Thing *t, const Thing *o) {
 // The flock-leader search shared by 18610 and 18870: nearest creature of t's type that has no leader
 // itself, inside the sight radius and the field of view.
 Thing *find_leader(Thing *t) {
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
         Thing *o = thing_at(i);
         if (o->parent != 0 || o == t) continue;
-        uint32_t d = dist_sq_xy16(o, t);
+        uint64_t d = dist_sq_xy16(o, t);
         if (d > limit) continue;
         if (!in_fov(t, o)) continue;
         if (d >= best_d) continue;
@@ -162,11 +168,11 @@ void creature_segment_update(Thing *t) {
 
 // terrain_slope_at_18150
 int terrain_slope_at(const Pos *pos) {
-    uint8_t x = (uint8_t)(pos->x >> 8), y = (uint8_t)(pos->y >> 8);
-    int h00 = g_map_height[mc_cell(x, y)];
-    int h10 = g_map_height[mc_cell((uint8_t)(x + 1), y)];
-    int h11 = g_map_height[mc_cell((uint8_t)(x + 1), (uint8_t)(y + 1))];
-    int h01 = g_map_height[mc_cell(x, (uint8_t)(y + 1))];
+    const int x = world_cx(pos->x), y = world_cx(pos->y);
+    int h00 = g_map_height[world_cell(x, y)];
+    int h10 = g_map_height[world_cell(x + 1, y)];
+    int h11 = g_map_height[world_cell(x + 1, y + 1)];
+    int h01 = g_map_height[world_cell(x, y + 1)];
     int a = h00 + h01 - h10 - h11;
     int b = h10 + h00 - h01 - h11;
     if (a < 0) a = -a;
@@ -252,12 +258,12 @@ void creature_ai_step(Thing *t, int base) {
     if (t->timer_a == 0) return;
 
     // nearest thing of the player list (wizards, castles, balloons) in sight and in the field of view
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
         Thing *p = thing_at(i);
-        uint32_t d = dist_sq_xy16(p, t);
+        uint64_t d = dist_sq_xy16(p, t);
         if (d > limit) continue;
         if (p->flags & 0x20) continue;
         if (!in_fov(t, p)) continue;
@@ -348,10 +354,13 @@ void creature_follow_leader(Thing *t, int base) {
         for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
             Thing *o = thing_at(i);
             if (o->owner == t->owner) continue;
-            int dx = (int16_t)t->x - (int16_t)o->x;
+            // (operands sign-extended before the subtraction, no wrap: the original's quirk; with N > 256
+            // world_signed centres the coordinates on 0 the same way, so the test misses across the
+            // half-world line exactly as the original misses across x = 0x8000)
+            int dx = world_signed(t->x) - world_signed(o->x);
             if (dx < 0) dx = -dx;
             if (dx >= 0x100) continue;
-            int dy = (int16_t)t->y - (int16_t)o->y;
+            int dy = world_signed(t->y) - world_signed(o->y);
             if (dy < 0) dy = -dy;
             if (dy >= 0x100) continue;
             t->target_yaw = (uint16_t)pos_angle_to(thing_pos(o), thing_pos(t));
@@ -588,13 +597,16 @@ int creature_proximity_wake_timer(Thing *t) {
     }
     const Thing *local = thing_at(g_state->players[g_state->local_player].thing);
     // pos_dist_sq_xy_3e970(thing pos, local pos): eax = dx^2 + dy^2 and edx is left holding dy^2
-    int32_t dy = (int16_t)(local->y - t->y);
-    int32_t dx = (int16_t)(local->x - t->x);
-    int32_t dy2 = dy * dy;
-    int32_t d2 = dx * dx + dy2;
+    // round 11: torus differences / int64 distance (world.h; the original's int32 sum with 256 cells,
+    // which wraps negative - "near" - at exactly 128 cells on both axes). The wake-near-any-wizard rule
+    // of a wide world is session 3.
+    int32_t dy = world_signed(local->y - t->y);
+    int32_t dx = world_signed(local->x - t->x);
+    int64_t d2 = world_dist_sq(dx, dy);
     if (d2 < 0x2400000) {
-        // "push edx; call math_isqrt_4cd7a": the root of dy^2, not of the distance
-        t->cast_ticks = (int16_t)mc_isqrt((uint32_t)dy2);
+        // "push edx; call math_isqrt_4cd7a": the root of dy^2, not of the distance (dy^2 <= 2^30 here
+        // with 256 cells; below 0x2400000 otherwise)
+        t->cast_ticks = (int16_t)mc_isqrt((uint32_t)((int64_t)dy * dy));
         t->timer_a = 0x10;
         for (Thing *seg = thing_at(t->child); seg != thing_at(0); seg = thing_at(seg->child))
             seg->timer_a = (uint8_t)(t->timer_a + 2);

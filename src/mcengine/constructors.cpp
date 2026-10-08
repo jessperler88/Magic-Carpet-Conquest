@@ -139,12 +139,12 @@ Thing *player_create_type2(const Pos *pos) {
     t->aux = 0;
     t->prop_flags = 0x21;
     Pos p = g_pos_scratch;
-    p.x = (uint16_t)(p.x >> 8);
-    p.y = (uint16_t)(p.y >> 8);
+    p.x = p.x >> 8;                       // round 11: cell numbers in WCoord, the store wraps (u16 at 256)
+    p.y = p.y >> 8;
     p.z = (int16_t)terrain_height_at(&g_pos_scratch);
-    if (((int16_t)p.y + (int16_t)p.x) % 2 != 0) p.x++;
-    p.x = (uint16_t)(p.x << 8);
-    p.y = (uint16_t)(p.y << 8);
+    if ((p.y + p.x) % 2 != 0) p.x++;
+    p.x = p.x << 8;
+    p.y = p.y << 8;
     t->home = p;
     thing_link_cell(t, &p);
     thing_restore_health(t);
@@ -198,8 +198,8 @@ Thing *scenery_create_tree(const Pos *pos) {
     t->health = (int32_t)(rng_next(t) % 5000u + 2500u);     // overwritten by thing_restore_health below
     t->prop_flags = 1;
     Pos p = *pos;
-    p.x = (uint16_t)((int16_t)p.x + (int32_t)(rng_next(t) & 0x3f) - 0x20);
-    p.y = (uint16_t)((int16_t)p.y + (int32_t)(rng_next(t) & 0x3f) - 0x20);
+    p.x = p.x + (int32_t)(rng_next(t) & 0x3f) - 0x20;      // WCoord wraps (the original's u16 store)
+    p.y = p.y + (int32_t)(rng_next(t) & 0x3f) - 0x20;
     thing_link_cell(t, &p);
     thing_restore_health(t);
     // thing_set_sprite_small_352d0; Hidden Worlds (HIDDEN.EXE 0x37f80): always 0x53, no RNG draw

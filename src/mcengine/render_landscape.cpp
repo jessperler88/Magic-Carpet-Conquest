@@ -9,6 +9,7 @@
 #include "raster.h"
 #include "mc_globals.h"
 #include "mc_math.h"
+#include "world.h"
 #include "gen/core_tables.h"
 #include "gen/render_tables.h"
 #include <cstring>
@@ -307,6 +308,8 @@ void render_landscape(const Camera &cam) {
     g_rcam.screen_cx = (width >> 1) + g_eye_offset;                // DAT_000b5894
     g_rcam.screen_cy = height >> 1;                                // DAT_000b586c
     const unsigned yaw = (unsigned)cam.yaw & 0x7ff;
+    // The low 16 bits only (the original's field): the Thing renderer's (int16_t)(x - cam_x16) is the exact
+    // difference in any world size for anything within 128 cells, and this grid reaches 20.
     g_rcam.cam_x16 = (uint16_t)cam.cam_x;                          // DAT_000b58ac
     g_rcam.yaw16   = (uint16_t)yaw;                                // DAT_000b58a8
     g_rcam.cam_y16 = (uint16_t)cam.cam_y;                          // DAT_000b58aa
@@ -360,8 +363,9 @@ void render_landscape(const Camera &cam) {
     g_rcam.cull_dist2 = kCullDist2;                                // DAT_000b584c
     g_rcam.fog_div    = kFogDiv;                                   // DAT_000b5844
     g_rcam.horizon    = (cam.pitch * width) >> 8;                  // DAT_000b588c
-    const uint8_t cx0 = (uint8_t)((cam.cam_x >> 8) + qs.start_dx);
-    const uint8_t cy0 = (uint8_t)((cam.cam_y >> 8) + qs.start_dy);
+    // round 11: cell coordinates wrap at the world size (world.h; the original's uint8_t at 256 cells)
+    const int cx0 = world_wrap_cell((cam.cam_x >> 8) + qs.start_dx);
+    const int cy0 = world_wrap_cell((cam.cam_y >> 8) + qs.start_dy);
     g_rcam.sin_roll = mc_sin((unsigned)cam.roll & 0x7ff);          // DAT_000b585c
     g_rcam.cos_roll = mc_cos((unsigned)cam.roll & 0x7ff);          // DAT_000b5870
 
@@ -381,11 +385,11 @@ void render_landscape(const Camera &cam) {
     const bool second = g_state->opt_second_surface != 0 && !sirds;
     const int32_t phase = (int32_t)(g_anim_tick << 6);             // player tick * 0x40
 
-    uint8_t cx = cx0, cy = cy0;
+    int cx = cx0, cy = cy0;
     VertexRec *rec = V;
     for (int r = 0; r < MC_GRID_ROWS; ++r) {
         for (int c = 0; c < MC_GRID_COLS; ++c, ++rec) {
-            const uint16_t cell = mc_cell(cx, cy);
+            const uint32_t cell = world_cell(cx, cy);
             const int32_t light = (int32_t)g_map_light[cell] * 0x100 + 0x80;
             int32_t z = rec->z_cam;
             rec->first_thing = 0;
@@ -412,8 +416,8 @@ void render_landscape(const Camera &cam) {
                 rec->sy = mul32(rec->h_rel, g_rcam.focal) / z + g_rcam.horizon;
                 if (second) rec->sy_mirror = mul32(rec->h_mirror, g_rcam.focal) / z + g_rcam.horizon;
 
-                const uint8_t tx = (uint8_t)(cx + qs.tex_dx), ty = (uint8_t)(cy + qs.tex_dy);
-                const uint16_t tcell = mc_cell(tx, ty);
+                const int tx = world_wrap_cell(cx + qs.tex_dx), ty = world_wrap_cell(cy + qs.tex_dy);
+                const uint32_t tcell = world_cell(tx, ty);
                 rec->texture = g_map_type[tcell];
                 if (second) {
                     if (tex_prop(g_tex_prop_water, rec->texture)) rec->flags |= 0x80;
@@ -421,14 +425,14 @@ void render_landscape(const Camera &cam) {
                 }
                 rec->tex_prop = tex_prop(g_tex_prop_shadow, rec->texture);
                 rec->uv_sel = (uint8_t)(((g_map_flags[tcell] >> 2) & 0x1c) + q);
-                rec->first_thing = g_cell_things[mc_cell((uint8_t)(tx + qs.thing_dx), (uint8_t)(ty + qs.thing_dy))];
+                rec->first_thing = g_cell_things[world_cell(tx + qs.thing_dx, ty + qs.thing_dy)];
             }
             rec->flags |= (uint8_t)((cx + cy) & 1);              // bit0: which diagonal splits the quad
-            cx = (uint8_t)(cx + qs.col_dx);
-            cy = (uint8_t)(cy + qs.col_dy);
+            cx = world_wrap_cell(cx + qs.col_dx);
+            cy = world_wrap_cell(cy + qs.col_dy);
         }
-        cx = (uint8_t)(cx + qs.row_dx);
-        cy = (uint8_t)(cy + qs.row_dy);
+        cx = world_wrap_cell(cx + qs.row_dx);
+        cy = world_wrap_cell(cy + qs.row_dy);
     }
 
     // Screen roll about the screen centre and the off-screen flags.
@@ -492,13 +496,13 @@ void render_view(const FrameBuffer &fb, const Camera &cam_in) {
     // Terrain-slope camera offset: sample the height map 2 cells apart around the camera cell
     // (rounded down when the fraction is < 0x80), low-pass the clamped slope and add it to the
     // camera position.
-    uint8_t cx = (uint8_t)(cam.cam_x >> 8), cy = (uint8_t)(cam.cam_y >> 8);
+    int cx = world_cx(cam.cam_x), cy = world_cx(cam.cam_y);
     if ((cam.cam_x & 0xff) < 0x80) cx--;
     if ((cam.cam_y & 0xff) < 0x80) cy--;
-    const int h00 = g_map_height[mc_cell(cx, cy)];
-    const int h20 = g_map_height[mc_cell((uint8_t)(cx + 2), cy)];
-    const int h22 = g_map_height[mc_cell((uint8_t)(cx + 2), (uint8_t)(cy + 2))];
-    const int h02 = g_map_height[mc_cell(cx, (uint8_t)(cy + 2))];
+    const int h00 = g_map_height[world_cell(cx, cy)];
+    const int h20 = g_map_height[world_cell(cx + 2, cy)];
+    const int h22 = g_map_height[world_cell(cx + 2, cy + 2)];
+    const int h02 = g_map_height[world_cell(cx, cy + 2)];
     int slope_x = (h00 - h20 - h22 + h02) * 2;
     int slope_y = (h00 + h20 - h22 - h02) * 2;
     if (slope_x > 100) slope_x = 100; else if (slope_x < -100) slope_x = -100;

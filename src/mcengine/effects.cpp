@@ -20,10 +20,11 @@
 
 namespace {
 
-inline unsigned cell_xy(uint8_t x, uint8_t y) { return ((unsigned)y << 8) | x; }
+// Round 11: cell coordinates are ints wrapped onto the world (the original's uint8_t arithmetic at 256).
+inline unsigned cell_xy(int x, int y) { return world_cell(x, y); }
 // Cell of a thing as the effect handlers compute it: (coordinate + 0x80) >> 8 on the signed word.
-inline uint8_t thing_cell_x(const Thing *t) { return (uint8_t)(((int16_t)t->x + 0x80) >> 8); }
-inline uint8_t thing_cell_y(const Thing *t) { return (uint8_t)(((int16_t)t->y + 0x80) >> 8); }
+inline int thing_cell_x(const Thing *t) { return world_wrap_cell((world_signed(t->x) + 0x80) >> 8); }
+inline int thing_cell_y(const Thing *t) { return world_wrap_cell((world_signed(t->y) + 0x80) >> 8); }
 // t->rng = t->rng * 0x24a1 + 0x24df; returns the new value.
 inline uint32_t rng_next(Thing *t) { t->rng = mc_lcg(t->rng); return t->rng; }
 // A thing index read from a field (the original multiplies by 0xa4 without a range check).
@@ -39,7 +40,9 @@ inline bool life_expired(Thing *t) {
 // GameState.volcano_thing / volcano_smoke (+0x24 / +0x26, inside the per-level zeroed block): the
 // erupting volcano (effect 0x12) and its smoke column (effect 0x13).
 
-// Signed x / y velocity kept in Thing.home (+0x96 / +0x98).
+// Signed x / y velocity kept in Thing.home (+0x96 / +0x98). Round 11: a velocity is a 16-bit quantity in
+// any world size - only its low 16 bits are meaningful (a negative one stored through WCoord in a wider world
+// keeps them), so every read goes through vel_x / vel_y and a position adds the sign-extended value.
 inline int  vel_x(const Thing *t) { return (int16_t)t->home.x; }
 inline int  vel_y(const Thing *t) { return (int16_t)t->home.y; }
 inline void clamp_velocity(Thing *t, int limit) {
@@ -67,9 +70,9 @@ inline void roll_on_slope(Thing *t) {
 inline Pos scatter_pos(Thing *t, int dx, int dy, int spacing) {
     Pos p;
     uint32_t r = rng_next(t) % 0x81u;
-    p.x = (uint16_t)(dx * spacing + (int16_t)t->x - 0x60 + (int32_t)r - 0x40);
+    p.x = dx * spacing + t->x - 0x60 + (int32_t)r - 0x40;          // WCoord wraps (the original's u16 store)
     r = rng_next(t) % 0x81u;
-    p.y = (uint16_t)(dy * spacing + (int16_t)t->y - 0x60 + (int32_t)r - 0x40);
+    p.y = dy * spacing + t->y - 0x60 + (int32_t)r - 0x40;
     p.z = t->z;
     return p;
 }
@@ -93,15 +96,15 @@ inline const CastleFootprint *thing_footprint(const Thing *t) {
 
 // terrain_max_drop_around_2376f (entry 0x23780)
 int terrain_max_drop_around(const Pos *pos) {
-    uint8_t x = (uint8_t)(((int16_t)pos->x - 0x80) >> 8);
-    uint8_t y = (uint8_t)(((int16_t)pos->y - 0x80) >> 8);
+    int x = world_cx(pos->x - 0x80);
+    int y = world_cx(pos->y - 0x80);
     int32_t centre = g_map_height[cell_xy(x, y)];
     int32_t drop = 0;
     // the walk order of the original: N, NE, E, SE, S, SW, W, NW (y - 1 first)
     static const int8_t step[8][2] = { {0, -1}, {1, 0}, {0, 1}, {0, 1}, {-1, 0}, {-1, 0}, {0, -1}, {0, -1} };
     for (const auto &s : step) {
-        x = (uint8_t)(x + s[0]);
-        y = (uint8_t)(y + s[1]);
+        x = world_wrap_cell(x + s[0]);
+        y = world_wrap_cell(y + s[1]);
         int32_t h = g_map_height[cell_xy(x, y)];
         if (h < centre && h - centre < drop) drop = h - centre;
     }
@@ -116,16 +119,16 @@ void effect_age_tick(Thing *t) {
 
 // terrain_ring_find_height_ne8_24d70 (jump table 0x24d54: +x, +y, -x, -y)
 unsigned terrain_ring_find_height_ne8(unsigned cell_in, unsigned start_radius) {
-    uint16_t start = (uint16_t)cell_in;
+    const uint32_t start = cell_in & (g_world.cells - 1);
     for (uint8_t r = (uint8_t)start_radius; r < 0x1e; r++) {
-        uint8_t x = (uint8_t)((start & 0xff) - r), y = (uint8_t)((start >> 8) - r);
+        int x = world_cell_x(start) - r, y = world_cell_y(start) - r;
         static const int8_t side[4][2] = { {1, 0}, {0, 1}, {-1, 0}, {0, -1} };
         for (const auto &s : side) {
             for (uint8_t n = r; n != 0; n--) {
                 unsigned c = cell_xy(x, y);
                 if (g_map_height[c] != 8) return c;
-                x = (uint8_t)(x + s[0]);
-                y = (uint8_t)(y + s[1]);
+                x = world_wrap_cell(x + s[0]);
+                y = world_wrap_cell(y + s[1]);
             }
         }
     }
@@ -342,8 +345,8 @@ void effect_lava_blob_update(Thing *t) {
     if (!(t->flags & 2)) t->flags |= 2;
     clamp_velocity(t, 0x50);
     g_pos_scratch = *thing_pos(t);
-    g_pos_scratch.x = (uint16_t)(t->x + t->home.x);
-    g_pos_scratch.y = (uint16_t)(t->y + t->home.y);
+    g_pos_scratch.x = t->x + vel_x(t);
+    g_pos_scratch.y = t->y + vel_y(t);
     g_pos_scratch.z = (int16_t)(g_pos_scratch.z + t->z_vel);
     t->z_vel = (int16_t)(t->z_vel - 0x1c);
     if (t->z_vel < -0x180) t->z_vel = -0x180;
@@ -762,8 +765,8 @@ void effect_mana_ball_update(Thing *t) {
     if (t->timer_a == 0) return;
     clamp_velocity(t, 0x40);
     g_pos_scratch = *thing_pos(t);
-    g_pos_scratch.x = (uint16_t)(t->x + t->home.x);
-    g_pos_scratch.y = (uint16_t)(t->y + t->home.y);
+    g_pos_scratch.x = t->x + vel_x(t);
+    g_pos_scratch.y = t->y + vel_y(t);
     g_pos_scratch.z = (int16_t)(g_pos_scratch.z + t->z_vel);
     t->z_vel = (int16_t)(t->z_vel - 0x10);
     if (t->z_vel < -0x80) t->z_vel = -0x80;
@@ -855,15 +858,15 @@ namespace {
 // cast_ticks (+0x30) = current base height byte, damage (+0x2c) = target height byte, aux = steps
 // left (> 0) or the wait counter (-10..-1). Built-on cells are parked with flag 8 for the wait.
 void effect_castle_level_ground_update(Thing *t) {
-    uint8_t cx = thing_cell_x(t), cy = thing_cell_y(t);
+    const int cx = thing_cell_x(t), cy = thing_cell_y(t);
     uint32_t w, h;
     footprint_dims(thing_footprint(t), &w, &h);
-    uint8_t x0 = (uint8_t)(cx - (w >> 1)), y0 = (uint8_t)(cy - (h >> 1));
+    const int x0 = world_wrap_cell(cx - (int)(w >> 1)), y0 = world_wrap_cell(cy - (int)(h >> 1));
     if (!(t->flags & 2)) {
         t->flags |= 2;
         t->aux = 10;
         t->cast_ticks = (int16_t)((int16_t)t->z >> 5);
-        t->damage = (uint16_t)terrain_height_avg((uint8_t)(x0 - 1), (uint8_t)(y0 - 1), (int)(h + 2), (int)(w + 2));
+        t->damage = (uint16_t)terrain_height_avg(world_wrap_cell(x0 - 1), world_wrap_cell(y0 - 1), (int)(h + 2), (int)(w + 2));
         if (t->damage > 0xdc) t->damage = 0xdc;
         if ((int32_t)t->cast_ticks == (int32_t)t->damage) t->aux = 0;
         return;
@@ -880,7 +883,7 @@ void effect_castle_level_ground_update(Thing *t) {
     t->cast_ticks = (int16_t)(t->cast_ticks + delta);
     auto for_rect = [&](auto &&fn) {
         for (uint32_t row = 0; row < h; row++)
-            for (uint32_t col = 0; col < w; col++) fn(cell_xy((uint8_t)(x0 + col), (uint8_t)(y0 + row)));
+            for (uint32_t col = 0; col < w; col++) fn(cell_xy(x0 + (int)col, y0 + (int)row));
     };
     if (t->aux == 1) {
         for_rect([&](unsigned c) {
@@ -918,16 +921,16 @@ void effect_castle_raise_terrain_update(Thing *t) {
         t->aux = 0x13;
         t->flags |= 2;
     }
-    uint8_t cx = thing_cell_x(t), cy = thing_cell_y(t);
+    const int cx = thing_cell_x(t), cy = thing_cell_y(t);
     uint32_t W, H;
     footprint_dims(thing_footprint(t), &W, &H);
-    uint8_t x0 = (uint8_t)(cx - (W >> 1)), y0 = (uint8_t)(cy - (H >> 1));
+    const int x0 = world_wrap_cell(cx - (int)(W >> 1)), y0 = world_wrap_cell(cy - (int)(H >> 1));
     if (t->aux <= 0) {
         t->aux++;
         if (t->aux != 0) return;
         for (uint32_t row = 0; row < H; row++)
             for (uint32_t col = 0; col < W; col++) {
-                unsigned c = cell_xy((uint8_t)(x0 + col), (uint8_t)(y0 + row));
+                unsigned c = cell_xy(x0 + (int)col, y0 + (int)row);
                 uint8_t f = g_map_flags[c];
                 if (f & 8) g_map_flags[c] = (uint8_t)((f | 0x80) & 0xf7);
             }
@@ -955,11 +958,11 @@ void effect_castle_raise_terrain_update(Thing *t) {
         uint32_t a, b;
         footprint_dims(fp, &a, &b);
         const uint32_t half_a = a >> 1, half_b = b >> 1;
-        const uint8_t xs = (uint8_t)(cx - half_b), ys = (uint8_t)(cy - half_a);
+        const int xs = world_wrap_cell(cx - (int)half_b), ys = world_wrap_cell(cy - (int)half_a);
         const int32_t col_ofs = (int32_t)half_w - (int32_t)half_b;
         int32_t row_ofs = ((int32_t)half_h - (int32_t)half_a) * (int32_t)W;
         int32_t idx = col_ofs + row_ofs;
-        uint8_t x = xs, y = ys;
+        int x = xs, y = ys;                            // wrapped by cell_xy (the original's uint8_t)
         uint32_t rows = a, i = 0;
         while (rows != 0 && i < fp->map_len) {
             int8_t c = (int8_t)fp->map[i++];
@@ -970,7 +973,7 @@ void effect_castle_raise_terrain_update(Thing *t) {
                 rows--;
                 idx = col_ofs + row_ofs;
             } else if (c < 0) {
-                x = (uint8_t)(x - c);
+                x = world_wrap_cell(x - c);
                 idx -= c;
             } else {
                 for (int n = c; n != 0 && i < fp->map_len; n--) {
@@ -1011,7 +1014,7 @@ void effect_castle_raise_terrain_update(Thing *t) {
     int32_t idx = 0;
     for (uint32_t row = 0; row < H; row++) {
         for (uint32_t col = 0; col < W; col++, idx++) {
-            unsigned cell = cell_xy((uint8_t)(x0 + col), (uint8_t)(y0 + row));
+            unsigned cell = cell_xy(x0 + (int)col, y0 + (int)row);
             int16_t d = delta[(size_t)idx];
             if (d != 0) {
                 if (g_map_height[cell] == 0) {
@@ -1065,8 +1068,8 @@ void effect_boulder_update(Thing *t) {
     t->home.y = (uint16_t)(t->home.y + g_pos_scratch.y);
     clamp_velocity(t, 0x80);
     g_pos_scratch = *thing_pos(t);
-    g_pos_scratch.x = (uint16_t)(g_pos_scratch.x + t->home.x);
-    g_pos_scratch.y = (uint16_t)(g_pos_scratch.y + t->home.y);
+    g_pos_scratch.x = g_pos_scratch.x + vel_x(t);
+    g_pos_scratch.y = g_pos_scratch.y + vel_y(t);
     g_pos_scratch.z = (int16_t)terrain_height_at(&g_pos_scratch);
     thing_move_to(t, &g_pos_scratch);
     thing_area_damage(t, 0, t->damage);

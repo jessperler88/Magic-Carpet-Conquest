@@ -8,6 +8,8 @@
 #include "mode.h"
 #include "mc_math.h"
 #include "mcfile.h"
+#include "world.h"
+#include "mc_image.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -228,6 +230,42 @@ static std::vector<uint8_t> save_v3_tail() {
     for (uint32_t x : g) put_u32(&v, x);
     return v;
 }
+// Bytes of a well-formed v3 tail at p (0 = malformed).
+static size_t v3_tail_size(const uint8_t *p, size_t len) {
+    if (len < 4) return 0;
+    const size_t m = get_u32(p);
+    if (m > len || len - 4 < m + 4) return 0;
+    const size_t n = get_u32(p + 4 + m);
+    if (n > (len - 8 - m) / 4) return 0;
+    return 8 + m + 4 * n;
+}
+
+// Round 11: the world block of a gax snapshot of a world wider than 256 cells (demo.h):
+//   "WRLD", u32 version 1, u32 size N, u32 slots, ThingHi[slots], WorldHi.
+constexpr uint32_t DEMO_WRLD_VERSION = 1;
+static size_t wrld_block_size(uint32_t slots) { return 16 + (size_t)slots * sizeof(ThingHi) + sizeof(WorldHi); }
+static void save_wrld_block(std::vector<uint8_t> *v) {
+    const uint32_t slots = (uint32_t)thing_pool_slots();
+    for (char c : {'W', 'R', 'L', 'D'}) v->push_back((uint8_t)c);
+    put_u32(v, DEMO_WRLD_VERSION);
+    put_u32(v, (uint32_t)g_world.size);
+    put_u32(v, slots);
+    for (uint32_t i = 0; i < slots; i++) {
+        const ThingHi hi = thing_hi(*thing_at(i));
+        const uint8_t *b = reinterpret_cast<const uint8_t *>(&hi);
+        v->insert(v->end(), b, b + sizeof hi);
+    }
+    const uint8_t *b = reinterpret_cast<const uint8_t *>(&g_world_hi);
+    v->insert(v->end(), b, b + sizeof g_world_hi);
+}
+// The block at p (len bytes, exactly the block): its size N (0 = not a valid block for `slots`).
+static uint32_t wrld_block_check(const uint8_t *p, size_t len, uint32_t slots) {
+    if (len != wrld_block_size(slots) || std::memcmp(p, "WRLD", 4) != 0 || get_u32(p + 4) != DEMO_WRLD_VERSION ||
+        get_u32(p + 12) != slots) return 0;
+    const uint32_t n = get_u32(p + 8);
+    return n > 256 && n <= (uint32_t)MC_WORLD_MAX && !(n & (n - 1)) ? n : 0;
+}
+
 static bool load_v3_tail(const uint8_t *p, size_t len) {
     if (len < 4) return false;
     const size_t m = get_u32(p);
@@ -249,6 +287,9 @@ bool demo_load_state(int number) {
     // port: the full quick load (PortSettings::quicksave_full, savegame.h savestate_*)
     if (number == 10000 && g_settings.quicksave_full && g_hook_demo_quick_load) return g_hook_demo_quick_load();
     const bool ext = s_ext && number != 10000;                  // port: gax%05d.dat of an extended-pool movie
+    // round 11: the original's GameState-only quick save cannot hold a world wider than 256 cells (and holds
+    // no maps to come back to 256 with): refused there (the full quick save handles any world)
+    if (!ext && world_wide()) return false;
     char path[1024];
     movie_path(path, sizeof path, ext ? "%s/gax%05d.dat" : "%s/gam%05d.dat", (int16_t)number);
     mc_blob gam;
@@ -264,17 +305,41 @@ bool demo_load_state(int number) {
         std::memcpy(&img, gam.data, kImage);
         std::memcpy(&img, g_state, 4);
         std::memcpy(reinterpret_cast<uint8_t *>(&img) + 0x2195, reinterpret_cast<const uint8_t *>(g_state) + 0x2195, 0x24);
-        state_from_image(img, g_state);
         uint32_t slots = 0;
         std::memcpy(&slots, gam.data + kImage, 4);
         const size_t n = slots > (uint32_t)MC_THING_SLOTS ? slots - (uint32_t)MC_THING_SLOTS : 0;
         const size_t base = kImage + 4 + n * sizeof(ThingImage);
-        ok = slots == (uint32_t)thing_pool_wanted_slots() && (s_version == 3 ? gam.len >= base : gam.len == base);
+        ok = slots == (uint32_t)thing_pool_wanted_slots() && gam.len >= base;
+        // round 11: the snapshot's end (+ the v3 tail), then nothing or the world block (demo.h)
+        size_t end = base;
+        if (ok && s_version == 3) {
+            const size_t tail = v3_tail_size(gam.data + base, gam.len - base);
+            ok = tail != 0;
+            end += tail;
+        }
+        uint32_t world = 256;
+        const uint8_t *wrld = nullptr;
+        if (ok && gam.len != end) {
+            world = wrld_block_check(gam.data + end, gam.len - end, slots);
+            // v3 snapshots of round 10 were read with ">= base": trailing bytes that are no block stay accepted
+            if (world) wrld = gam.data + end;
+            else { world = 256; ok = s_version == 3; }
+        }
+        // the world size before any coordinate is stored (WCoord wraps at g_world.units)
+        if (!world_set_size((int)world)) ok = false;
+        std::vector<ThingHi> hi(wrld ? slots : 0);
+        if (wrld) {
+            std::memcpy(hi.data(), wrld + 16, hi.size() * sizeof(ThingHi));
+            std::memcpy(&g_world_hi, wrld + 16 + hi.size() * sizeof(ThingHi), sizeof g_world_hi);
+        } else {
+            std::memset(&g_world_hi, 0, sizeof g_world_hi);
+        }
+        state_from_image(img, g_state, wrld ? hi.data() : nullptr);
         thing_pool_ext_reset();
         for (size_t i = 0; ok && i < n; i++) {
             ThingImage ti;
             std::memcpy(&ti, gam.data + kImage + 4 + i * sizeof(ThingImage), sizeof ti);
-            thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)));
+            thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)), wrld ? &hi[MC_THING_SLOTS + i] : nullptr);
         }
         if (ok && s_version == 3) ok = load_v3_tail(gam.data + base, gam.len - base);
     } else {
@@ -305,11 +370,20 @@ bool demo_load_terrain(int number) {
         if (n) std::memcpy(dst, map.data + off, n);
         off += n;
     };
-    rd(g_map_type, 0x10000);
-    rd(g_map_height, 0x10000);
-    rd(g_map_light, 0x10000);
-    rd(g_map_flags, 0x10000);
-    rd(g_cell_things, 0x20000);
+    // round 11: a world wider than 256 cells (set by its gax snapshot, which demo_load_state reads first)
+    // has the wide map format of demo.h: "MCWM", u32 N, then the maps at N*N
+    const size_t cells = g_world.cells;
+    if (world_wide()) {
+        const bool ok = map.len == 8 + cells * 6 + 0x12c2 && std::memcmp(map.data, "MCWM", 4) == 0 &&
+                        get_u32(map.data + 4) == (uint32_t)g_world.size;
+        if (!ok) { mc_blob_free(&map); return false; }
+        off = 8;
+    }
+    rd(g_map_type, cells);
+    rd(g_map_height, cells);
+    rd(g_map_light, cells);
+    rd(g_map_flags, cells);
+    rd(g_cell_things, cells * 2);
     rd(g_corner_tex_table, 0x12c2);
     mc_blob_free(&map);
     return true;
@@ -372,9 +446,15 @@ bool demo_save_state(int number) {
             const std::vector<uint8_t> tail = save_v3_tail();
             ok = std::fwrite(tail.data(), 1, tail.size(), f) == tail.size();
         }
+        if (ok && world_wide()) {                               // round 11: the world block (demo.h)
+            std::vector<uint8_t> blk;
+            save_wrld_block(&blk);
+            ok = std::fwrite(blk.data(), 1, blk.size(), f) == blk.size();
+        }
         ok = std::fclose(f) == 0 && ok;
         return ok;
     }
+    if (world_wide()) return false;                             // round 11: see demo_load_state
     movie_path_in(s_rec_dir, path, sizeof path, "%s/gam%05d.dat", (int16_t)number);
     static uint8_t image[MC_STATE_IMAGE_SIZE];
     demo_state_to_original(g_state, image);
@@ -392,11 +472,17 @@ bool demo_save_terrain(int number) {
     movie_path_in(s_rec_dir, path, sizeof path, (s_ext && number != 10000) ? "%s/max%05d.dat" : "%s/map%05d.dat", (int16_t)number);
     std::FILE *f = std::fopen(path, "wb");
     if (!f) return false;
-    std::fwrite(g_map_type, 1, 0x10000, f);
-    std::fwrite(g_map_height, 1, 0x10000, f);
-    std::fwrite(g_map_light, 1, 0x10000, f);
-    std::fwrite(g_map_flags, 1, 0x10000, f);
-    std::fwrite(g_cell_things, 1, 0x20000, f);
+    const size_t cells = g_world.cells;                         // 0x10000: the original's file
+    if (world_wide()) {                                         // round 11: the wide map format (demo.h)
+        const uint32_t n = (uint32_t)g_world.size;
+        std::fwrite("MCWM", 1, 4, f);
+        std::fwrite(&n, 1, 4, f);
+    }
+    std::fwrite(g_map_type, 1, cells, f);
+    std::fwrite(g_map_height, 1, cells, f);
+    std::fwrite(g_map_light, 1, cells, f);
+    std::fwrite(g_map_flags, 1, cells, f);
+    std::fwrite(g_cell_things, 1, cells * 2, f);
     std::fwrite(g_corner_tex_table, 1, 0x12c2, f);
     std::fclose(f);
     return true;
@@ -408,14 +494,16 @@ static void demo_record_step(CmdPacket *pkt) {
     if (handle_get() == 0 && index == 0) {
         char path[1024];
         path[0] = 0;
-        s_ext = pool_extended() || rules_extended() || mode_active();   // port: mvx / gax / max (extended pool / rules / mode)
+        // port: mvx / gax / max (extended pool / rules / mode; round 11: a world wider than 256 cells)
+        s_ext = pool_extended() || rules_extended() || mode_active() || world_wide();
         s_version = 0;
         if (!s_rec_dir.empty()) movie_path_in(s_rec_dir, path, sizeof path, fmt_mvi(), (int16_t)g_cfg->movie);
         s_out = path[0] ? std::fopen(path, "wb") : nullptr;     // file_open_619a0(name, 0x222)
         if (s_out && s_ext) {
             const GameplayRules rules = gameplay_rules();
             const bool v3 = mode_active();                      // round 10: a game-mode run (demo.h)
-            const bool v2 = !v3 && !gameplay_rules_faithful(rules);
+            // round 11: a wide world without a mode is version 2 (version 1 needs an extended pool)
+            const bool v2 = !v3 && (!gameplay_rules_faithful(rules) || world_wide());
             s_version = v3 ? 3 : v2 ? 2 : 1;
             DemoExtHeader h{{'M', 'C', 'P', 'X'}, (uint32_t)s_version, (uint32_t)thing_pool_slots(), 0u};
             DemoExtRules r{(uint32_t)rules.possession_range_pct, v3 ? g_mode.mode : 0u, {0, 0}};
@@ -515,12 +603,12 @@ static int cell_list_problems(std::string *mark) {
     const int n = thing_pool_slots();
     mark->assign((size_t)n, 0);
     int problems = 0;
-    for (int cell = 0; cell < MC_MAP_CELLS; cell++) {
+    for (uint32_t cell = 0; cell < g_world.cells; cell++) {    // round 11: every cell of the world
         unsigned prev = 0;
         for (unsigned idx = g_cell_things[cell]; idx != 0; ) {
             if (idx >= (unsigned)n || (*mark)[idx]) { problems++; break; }
             const Thing *t = thing_at(idx);
-            if (!(t->flags & 4) || mc_cell_of(t->x, t->y) != cell || t->cell_prev != prev) { problems++; break; }
+            if (!(t->flags & 4) || world_cell_of(t->x, t->y) != cell || t->cell_prev != prev) { problems++; break; }
             (*mark)[idx] = 1;
             prev = idx;
             idx = t->cell_next;
@@ -537,18 +625,18 @@ int demo_repair_cell_lists() {
     if (problems == 0) return 0;
     const int n = thing_pool_slots();
     // 1. the heads the Things' own links name: the lists as they were when the Things were saved
-    std::memset(g_cell_things, 0, sizeof(uint16_t) * MC_MAP_CELLS);
+    std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
     for (int i = 1; i < n; i++) {
         const Thing *t = thing_at((unsigned)i);
-        if ((t->flags & 4) && t->cell_prev == 0) g_cell_things[mc_cell_of(t->x, t->y)] = (uint16_t)i;
+        if ((t->flags & 4) && t->cell_prev == 0) g_cell_things[world_cell_of(t->x, t->y)] = (uint16_t)i;
     }
     if (cell_list_problems(&mark) == 0) return problems;
     // 2. relink every linked Thing, lists in index order
-    std::memset(g_cell_things, 0, sizeof(uint16_t) * MC_MAP_CELLS);
+    std::memset(g_cell_things, 0, sizeof(uint16_t) * g_world.cells);
     for (int i = n - 1; i >= 1; i--) {
         Thing *t = thing_at((unsigned)i);
         if (!(t->flags & 4)) continue;
-        const uint16_t cell = mc_cell_of(t->x, t->y);
+        const uint32_t cell = world_cell_of(t->x, t->y);
         t->cell_prev = 0;
         t->cell_next = g_cell_things[cell];
         if (t->cell_next) thing_at(t->cell_next)->cell_prev = (uint16_t)i;

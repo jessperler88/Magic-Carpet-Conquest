@@ -145,7 +145,14 @@ extension and a custom Watcom calling-convention spec (`x86watcom.cspec`),
 Python 3.13 (`propack`, `pillow`, `pyghidra`), vcpkg with `sdl2:x64-windows`,
 Visual Studio 18 Build Tools, CMake 4.3.
 
-## Where things stand (2026-10-08, Hidden Worlds)
+## Where things stand (2026-10-08, Conquest round 11 session 1 - branch `round11`)
+
+- Positions are 32-bit and the world size is a run-time parameter (256 .. 4096 cells, `src/mcengine/world.h`); the
+  original game runs through the same code and stays byte-identical to the original (all reference sets).
+  `mcport <dir> rts --size 1024` plays a tiled 1024-cell world until the world generator arrives (session 2).
+  65 ctest tests. Plan: `docs/ROADMAP_PHASE4.md` round 11.
+
+## Before that (2026-10-08, Hidden Worlds)
 
 - The Hidden Worlds expansion is part of the campaign (campaign index 100 + k = `ddlevels.dat` entry k, data set 1 via
   `mcengine/world_set.h`). All 25 levels generate byte-identically to `HIDDEN.EXE`, and idle-player playbacks of six

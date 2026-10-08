@@ -15,6 +15,9 @@
 //     wizard g_ai_human_wizard are reset from the match seed, every record's campaign spell_found is cleared,
 //     and the human players get their level start spells as in a network game (the campaign gives a human
 //     only the spells found earlier in the campaign - none in a mode run).
+// Round 11: ModeParams.world_size N > 256 (a power of two up to MC_WORLD_MAX) widens the level at the level start
+// with world_widen_tiled(N) (world.h): the template repeated (N/256)^2 times, every Thing in the first copy -
+// the session-1 test bed until the generator on N (session 2) replaces it.
 // The level is loaded under MODE_LEVEL_INDEX (mode.h) through g_hook_level_source (sim.h), so
 // game_level_begin, restarts (level_finish) and savestate loads find it like a levels.dat entry.
 #pragma once

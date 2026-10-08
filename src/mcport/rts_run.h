@@ -3,7 +3,8 @@
 //
 // Options after `rts` (all optional):
 //   --seed S          match seed (default 1): template map, AI seed, mode RNG
-//   --size N          world size in cells (256 only until round 11)
+//   --size N          world size in cells: a power of two 256..4096 (round 11 session 1: > 256 = the template
+//                     map tiled N/256 times per axis, mode_level.h)
 //   --bots B          computer wizards (default 3; humans + bots <= 8)
 //   --map M           template level 50..69 (default: chosen from the seed)
 //   --reseed          re-seed the template's terrain generator from the seed (default: the map's own terrain)

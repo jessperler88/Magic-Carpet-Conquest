@@ -127,6 +127,15 @@ bool demo_extended();           // the movie being played / recorded uses the mv
 //     then the DEMO_SIM_GLOBALS values of g_hook_demo_sim_globals_get (mode_level.cpp: g_terrain_nearly_flat,
 //     the AI's g_ai_rand_seed and g_ai_human_wizard, 2 reserved)
 //   max%05d.dat: as map%05d.dat.
+// Round 11, a world wider than 256 cells (world.h; any mvx version - a wide recording without a mode is
+// version 2, the original's mvi / gam / map files are never written or read in a wide world):
+//   gax%05d.dat: after the snapshot (v1 / v2: after the extension's Things, v3: after the tail) the world block
+//     "WRLD", u32 version 1, u32 size N, u32 slots (= the u32 slots before), ThingHi[slots] (mc_image.h: the
+//     high halves of x / y / home of every slot, GameState's 1000 then the extension), WorldHi (g_world_hi);
+//     demo_load_state sets the world size from it (world_set_size, 256 without a block) before any coordinate
+//     is stored. A 256-cell snapshot has no block (byte-identical to round 10).
+//   max%05d.dat: "MCWM", u32 N, type / height / light / flags (N*N each), cell heads (u16 N*N), the corner
+//     table (0x12c2); demo_load_terrain expects it exactly when the world is wide.
 // demo_open of a version 3 movie starts the mode run through g_hook_demo_mode_start (mode_level.h
 // mode_start_run with the recorded mode and ModeParams; refused when the hook is missing) and forces the
 // recorded rules; demo_close stops it (g_hook_demo_mode_stop). v1 / v2 movies and the original's mvi movies

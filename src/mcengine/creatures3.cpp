@@ -21,16 +21,21 @@ inline bool think_now(const Thing *t) {
 // tick % n == 0 for a derived period (think_period + 1, * 2, * 8, ...)
 inline bool every(const Thing *t, int n) { return n != 0 && (int)t->tick % n == 0; }
 
-inline uint32_t dist_sq_xy16(const Thing *a, const Thing *b) {
-    int32_t dx = (int16_t)(a->x - b->x);
-    int32_t dy = (int16_t)(a->y - b->y);
-    return (uint32_t)(dx * dx) + (uint32_t)(dy * dy);
+// Unsigned squared xy distance of the torus differences (the original's uint32 sum of the 16-bit
+// wrapped differences, at most 2^31: the same value with 256 cells; 64-bit for a wider world).
+inline uint64_t dist_sq_xy16(const Thing *a, const Thing *b) {
+    int64_t dx = world_signed(a->x - b->x);
+    int64_t dy = world_signed(a->y - b->y);
+    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
 }
 
-inline uint32_t sight_sq(const Thing *t) {
+inline uint64_t sight_sq(const Thing *t) {
     int32_t s = (int16_t)desc_of(t)->sight_radius;
     return (uint32_t)(s * s);
 }
+
+// The original's 0xffffffff "none yet" (unreachable with 256 cells); 64-bit for a wider world.
+constexpr uint64_t kFarSq = ~(uint64_t)0;
 
 inline bool target_gone(const Thing *target) { return target->health < 0 || (target->flags & 0x400); }
 
@@ -41,14 +46,14 @@ inline void creature_sound(const Thing *t, int id) { sound_request((int16_t)thin
 // distance, unsigned), without flag 0x20, inside the field of view; `accept` filters first.
 template <typename F>
 Thing *nearest_enemy_in_fov(const Thing *t, F accept) {
-    uint32_t limit = sight_sq(t);
+    uint64_t limit = sight_sq(t);
     int fov = (int16_t)desc_of(t)->fov;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
         Thing *p = thing_at(i);
         if (!accept(p)) continue;
-        uint32_t d = dist_sq_xy16(p, t);
+        uint64_t d = dist_sq_xy16(p, t);
         if (d > limit) continue;
         if (p->flags & 0x20) continue;
         int ang = pos_angle_to(thing_pos(t), thing_pos(p)) & 0xffff;
@@ -93,8 +98,8 @@ void creature_genie_s66_update(Thing *t) {
             if (n == 0) break;
             g_pos_scratch = *thing_pos(t);
             int k = (int16_t)t->aux;
-            g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + (k % 3) * 0x28);
-            g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + (k / 3) * 0x28);
+            g_pos_scratch.x = g_pos_scratch.x + (k % 3) * 0x28;        // (16-bit sums; WCoord wraps)
+            g_pos_scratch.y = g_pos_scratch.y + (k / 3) * 0x28;
             Thing *e = thing_create(&g_pos_scratch, 10, 1);
             if (e) {
                 e->owner = t->owner;
@@ -113,9 +118,10 @@ void creature_genie_s66_update(Thing *t) {
         t->damage_slots[0].attacker = 0;
         g_pos_scratch = *thing_pos(t);
         t->rng = mc_lcg(t->rng);
-        g_pos_scratch.x = (uint16_t)((int16_t)g_pos_scratch.x + (((t->rng % 0x3cu) << 8) + 0x3200));
+        // (a jump of 50..109 cells, wrapped at the world's width: a game range, the same in any world)
+        g_pos_scratch.x = g_pos_scratch.x + (int32_t)(((t->rng % 0x3cu) << 8) + 0x3200);
         t->rng = mc_lcg(t->rng);
-        g_pos_scratch.y = (uint16_t)((int16_t)g_pos_scratch.y + (((t->rng % 0x3cu) << 8) + 0x3200));
+        g_pos_scratch.y = g_pos_scratch.y + (int32_t)(((t->rng % 0x3cu) << 8) + 0x3200);
         thing_move_to(t, &g_pos_scratch);
         thing_set_state(t, 0x43);
     } else {
@@ -313,12 +319,12 @@ void creature_wyvern_s97_update(Thing *t) {
     creature_ai_step(t, 0x60);
     if (t->state != 0x61) return;
     if (!every(t, (int16_t)desc_of(t)->think_period + 1)) return;
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) {
         Thing *w = thing_at(i);
-        uint32_t d = dist_sq_xy16(w, t);
+        uint64_t d = dist_sq_xy16(w, t);
         if (d > limit) continue;
         if (d >= best_d) continue;
         best = w;
@@ -416,13 +422,13 @@ void genie_appear_at_target(Thing *t) {
 // genie_steal_mana_1d310
 void genie_steal_mana(Thing *t) {
     if (t->mana >= t->mana_total) return;
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *ball = nullptr;
     for (uint32_t i = g_cfg->mana_ball_list; i != 0; i = thing_at(i)->next) {
         Thing *o = thing_at(i);
         if (o->type != 0x27) continue;
-        uint32_t d = dist_sq_xy16(o, t);
+        uint64_t d = dist_sq_xy16(o, t);
         if (d > limit) continue;
         if (d >= best_d) continue;
         ball = o;
@@ -488,19 +494,21 @@ void type15_move(Thing *t) {
         // snap the coordinate across the heading to the cell centre (jump table 0x1ef6c: 0 / 2 -> y,
         // 1 / 3 -> x)
         int k = (((int)t->yaw - 0x100) >> 9) & 3;
+        // (the original's ((int16)v >> 8 << 8) + 0x80 in 16 bits: the cell's centre)
         if (k == 0 || k == 2)
-            g_pos_scratch.y = (uint16_t)((((int16_t)g_pos_scratch.y >> 8) << 8) + 0x80);
+            g_pos_scratch.y = (g_pos_scratch.y & ~0xff) + 0x80;
         else
-            g_pos_scratch.x = (uint16_t)((((int16_t)g_pos_scratch.x >> 8) << 8) + 0x80);
+            g_pos_scratch.x = (g_pos_scratch.x & ~0xff) + 0x80;
     }
     // turn away from the first creature of the same type and another owner within a cell in x and y
     for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
         const Thing *o = thing_at(i);
         if (o->owner == t->owner) continue;
-        int dx = (int16_t)t->x - (int16_t)o->x;
+        // (sign-extended operands, no wrap: the original's quirk, kept through world_signed)
+        int dx = world_signed(t->x) - world_signed(o->x);
         if (dx < 0) dx = -dx;
         if (dx >= 0x100) continue;
-        int dy = (int16_t)t->y - (int16_t)o->y;
+        int dy = world_signed(t->y) - world_signed(o->y);
         if (dy < 0) dy = -dy;
         if (dy >= 0x100) continue;
         t->target_yaw = (uint16_t)pos_angle_to(thing_pos(o), thing_pos(t));

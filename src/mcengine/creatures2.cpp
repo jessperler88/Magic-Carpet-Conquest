@@ -24,17 +24,21 @@ inline bool think_now(const Thing *t) {
     return period != 0 && (int)t->tick % period == 0;
 }
 
-// (dx^2 + dy^2) of the 16-bit wrapped coordinate differences, as an unsigned 32-bit value.
-inline uint32_t dist_sq_xy16(const Thing *a, const Thing *b) {
-    int32_t dx = (int16_t)(a->x - b->x);
-    int32_t dy = (int16_t)(a->y - b->y);
-    return (uint32_t)(dx * dx) + (uint32_t)(dy * dy);
+// (dx^2 + dy^2) of the torus-wrapped coordinate differences, unsigned (the original's uint32 sum of the
+// 16-bit wrapped differences, at most 2^31: the same value with 256 cells; 64-bit for a wider world).
+inline uint64_t dist_sq_xy16(const Thing *a, const Thing *b) {
+    int64_t dx = world_signed(a->x - b->x);
+    int64_t dy = world_signed(a->y - b->y);
+    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
 }
 
-inline uint32_t sight_sq(const Thing *t) {
+inline uint64_t sight_sq(const Thing *t) {
     int32_t s = (int16_t)desc_of(t)->sight_radius;
     return (uint32_t)(s * s);
 }
+
+// The original's 0xffffffff "none yet" (unreachable with 256 cells); 64-bit for a wider world.
+constexpr uint64_t kFarSq = ~(uint64_t)0;
 
 // angle_diff(t.yaw, pos_angle_to(t, o) & 0xffff) & 0xffff < (int16)desc.fov
 inline bool in_fov(const Thing *t, const Thing *o) {
@@ -52,12 +56,12 @@ inline bool is_mana_ball(const Thing *o) { return o->cls == 10 && o->type == 0x2
 // nearest player-list thing inside the sight radius and the field of view. The crab skips things
 // with flag 0x20 (0x1a9df); the griffon's copy has no such test.
 Thing *nearest_player_thing(const Thing *t, bool skip_flag20) {
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
         Thing *p = thing_at(i);
-        uint32_t d = dist_sq_xy16(p, t);
+        uint64_t d = dist_sq_xy16(p, t);
         if (d > limit) continue;
         if (skip_flag20 && (p->flags & 0x20)) continue;
         if (!in_fov(t, p)) continue;
@@ -71,13 +75,13 @@ Thing *nearest_player_thing(const Thing *t, bool skip_flag20) {
 // The flock-leader search as the griffon inlines it (0x1b871): nearest leaderless creature of the
 // same type inside the sight radius and the field of view.
 Thing *nearest_leader(const Thing *t) {
-    uint32_t limit = sight_sq(t);
-    uint32_t best_d = 0xffffffffu;
+    uint64_t limit = sight_sq(t);
+    uint64_t best_d = kFarSq;
     Thing *best = nullptr;
     for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
         Thing *o = thing_at(i);
         if (o->parent != 0 || o == t) continue;
-        uint32_t d = dist_sq_xy16(o, t);
+        uint64_t d = dist_sq_xy16(o, t);
         if (d > limit) continue;
         if (!in_fov(t, o)) continue;
         if (d >= best_d) continue;
@@ -145,12 +149,12 @@ void creature_crab_s31_update(Thing *t) {
             break;
         }
         // (tick % think_period) * 2 != 0 -> done: never, the think test above already passed
-        uint32_t best_d = 0xffffffffu;
+        uint64_t best_d = kFarSq;
         Thing *best = nullptr;
         for (uint32_t i = g_cfg->mana_ball_list; i != 0; i = thing_at(i)->next) {
             Thing *o = thing_at(i);
             if (o->type != 0x27) continue;
-            uint32_t d = dist_sq_xy16(o, t);
+            uint64_t d = dist_sq_xy16(o, t);
             if (d >= best_d) continue;
             best = o;
             best_d = d;

@@ -15,6 +15,8 @@
 #include "settings.h"
 #include "projectiles.h"
 #include "mode.h"
+#include "world.h"
+#include "mc_image.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -214,7 +216,12 @@ struct Writer {
 constexpr uint32_t GLOB_VERSION = 1;
 constexpr uint32_t RULE_VERSION = 2;          // "RULE": u32 version, u32 possession_range_pct, (v2) u32 mode
 constexpr size_t   GLOB_FIXED = 11 * 4;      // version + 9 values + dummy block size
-constexpr size_t   MAPS_BYTES = 4 * 0x10000 + 0x20000 + sizeof g_corner_tex_table;
+constexpr size_t   MAPS_BYTES = 4 * 0x10000 + 0x20000 + sizeof g_corner_tex_table;   // the 256-cell world
+constexpr uint32_t WRLD_VERSION = 1;
+// "WRLD" (round 11, a world wider than 256 cells, savegame.h): its byte count for size n and `slots` Things.
+size_t wrld_bytes(uint32_t n, uint32_t slots) {
+    return 12 + (size_t)n * n * 6 + sizeof g_corner_tex_table + (size_t)slots * sizeof(ThingHi) + sizeof(WorldHi);
+}
 }
 
 // "GLOB": the simulation globals that live outside GameState / Config (version 1, u32 each, then the
@@ -257,10 +264,29 @@ bool savestate_save_file(const char *path, const char *name) {
         state_to_image(*g_state, &img);
         const size_t c = w.begin("GAME"); w.raw(&img, sizeof img); w.end(c); }
     {   const size_t c = w.begin("CONF"); w.raw(g_cfg, sizeof(Config)); w.end(c); }
-    {   const size_t c = w.begin("MAPS");
+    const int slots = thing_pool_slots();
+    if (!world_wide()) {
+        const size_t c = w.begin("MAPS");
         w.raw(g_map_type, 0x10000); w.raw(g_map_height, 0x10000); w.raw(g_map_light, 0x10000);
         w.raw(g_map_flags, 0x10000); w.raw(g_cell_things, 0x20000); w.raw(g_corner_tex_table, sizeof g_corner_tex_table);
-        w.end(c); }
+        w.end(c);
+    } else {
+        // round 11: a wider world replaces MAPS by WRLD (savegame.h), so a reader without WRLD support refuses
+        // the file (MAPS is required) instead of loading 256 cells of it
+        const size_t c = w.begin("WRLD");
+        const size_t cells = g_world.cells;
+        w.u32(WRLD_VERSION);
+        w.u32((uint32_t)g_world.size);
+        w.u32((uint32_t)slots);
+        w.raw(g_map_type, cells); w.raw(g_map_height, cells); w.raw(g_map_light, cells);
+        w.raw(g_map_flags, cells); w.raw(g_cell_things, cells * 2); w.raw(g_corner_tex_table, sizeof g_corner_tex_table);
+        for (int i = 0; i < slots; i++) {
+            const ThingHi hi = thing_hi(*thing_at((unsigned)i));
+            w.raw(&hi, sizeof hi);
+        }
+        w.raw(&g_world_hi, sizeof g_world_hi);
+        w.end(c);
+    }
     {   const size_t c = w.begin("GLOB"); write_globals(w); w.end(c); }
     {   const size_t c = w.begin("CAMP");
         SaveGame g;
@@ -282,7 +308,6 @@ bool savestate_save_file(const char *path, const char *name) {
         mode_serialise(m.data());
         w.raw(m.data(), m.size());
         w.end(c); }
-    const int slots = thing_pool_slots();
     if (slots > MC_THING_SLOTS) {
         const size_t c = w.begin("POOL");
         const size_t e = (size_t)(slots - MC_THING_SLOTS);
@@ -394,8 +419,8 @@ bool savestate_load_file(const char *path) {
 
     // Collect and check every chunk before anything is changed.
     const uint8_t *game = nullptr, *conf = nullptr, *maps = nullptr, *glob = nullptr, *camp = nullptr, *pool = nullptr;
-    const uint8_t *rule = nullptr, *mode = nullptr;
-    size_t glob_n = 0, camp_n = 0, pool_n = 0, rule_n = 0, mode_n = 0;
+    const uint8_t *rule = nullptr, *mode = nullptr, *wrld = nullptr;
+    size_t glob_n = 0, camp_n = 0, pool_n = 0, rule_n = 0, mode_n = 0, wrld_n = 0;
     for (size_t off = h.header_size; off + 8 <= data.size(); ) {
         const uint8_t *c = data.data() + off;
         const size_t len = get32(c + 4);
@@ -409,9 +434,22 @@ bool savestate_load_file(const char *path) {
         else if (!std::memcmp(c, "POOL", 4)) { pool = body; pool_n = len; }
         else if (!std::memcmp(c, "RULE", 4)) { rule = body; rule_n = len; }
         else if (!std::memcmp(c, "MODE", 4)) { mode = body; mode_n = len; }
+        else if (!std::memcmp(c, "WRLD", 4)) { wrld = body; wrld_n = len; }
         off += 8 + len;                                         // unknown chunks are skipped
     }
-    if (!game || !conf || !maps) { s_state_error = "a required chunk is missing"; return false; }
+    // Round 11: a world wider than 256 cells has WRLD instead of MAPS (savegame.h); exactly one of them.
+    uint32_t wrld_size = 256;
+    if (wrld) {
+        wrld_size = wrld_n >= 12 ? get32(wrld + 4) : 0;
+        if (wrld_n < 12 || get32(wrld) != WRLD_VERSION || wrld_size <= 256 || wrld_size > (uint32_t)MC_WORLD_MAX ||
+            (wrld_size & (wrld_size - 1)) || get32(wrld + 8) != h.thing_slots ||
+            wrld_n != wrld_bytes(wrld_size, h.thing_slots)) {
+            s_state_error = "world chunk of another version or size";
+            return false;
+        }
+        if (maps) { s_state_error = "both a 256-cell map and a world chunk"; return false; }
+    }
+    if (!game || !conf || (!maps && !wrld)) { s_state_error = "a required chunk is missing"; return false; }
     if (!globals_valid(glob, glob_n)) { s_state_error = "globals chunk missing or of another version"; return false; }
     if (mode && mode_n != mode_serialised_size()) { s_state_error = "mode chunk of another version"; return false; }
     const size_t e = h.thing_slots - (uint32_t)MC_THING_SLOTS;
@@ -427,6 +465,21 @@ bool savestate_load_file(const char *path) {
         if (!world_set_select(world_set_for_level(lvl))) { s_state_error = "Hidden Worlds data not installed"; return false; }
     }
 
+    // Round 11: the saved world's size before any coordinate is stored (WCoord wraps at g_world.units);
+    // world_set_size clears the maps when the size changes, they are restored below.
+    if (!world_set_size((int)wrld_size)) { s_state_error = "no memory for the saved world"; return false; }
+    const uint8_t *wrld_maps = wrld ? wrld + 12 : nullptr;
+    const size_t wrld_cells = (size_t)wrld_size * wrld_size;
+    const uint8_t *wrld_hi = wrld ? wrld_maps + wrld_cells * 6 + sizeof g_corner_tex_table : nullptr;
+    std::vector<ThingHi> thi;
+    if (wrld) {
+        thi.resize(h.thing_slots);
+        std::memcpy(thi.data(), wrld_hi, thi.size() * sizeof(ThingHi));
+        std::memcpy(&g_world_hi, wrld_hi + thi.size() * sizeof(ThingHi), sizeof g_world_hi);
+    } else {
+        std::memset(&g_world_hi, 0, sizeof g_world_hi);
+    }
+
     // GameState in the port's form, except the first dword and the option bytes the user set
     // (+0x2195..+0x21b8), which are kept the way demo_load_state_3c200 keeps them.
     {
@@ -436,7 +489,7 @@ bool savestate_load_file(const char *path) {
         const uint8_t *st = reinterpret_cast<const uint8_t *>(g_state);
         std::memcpy(d, st, 4);
         std::memcpy(d + 0x2195, st + 0x2195, 0x24);
-        state_from_image(img, g_state);
+        state_from_image(img, g_state, wrld ? thi.data() : nullptr);
     }
 
     // Config: everything but the fields of the platform / the session.
@@ -456,13 +509,16 @@ bool savestate_load_file(const char *path) {
         g_cfg->pit_accum = keep.pit_accum;
     }
 
-    const uint8_t *m = maps;
-    std::memcpy(g_map_type, m, 0x10000); m += 0x10000;
-    std::memcpy(g_map_height, m, 0x10000); m += 0x10000;
-    std::memcpy(g_map_light, m, 0x10000); m += 0x10000;
-    std::memcpy(g_map_flags, m, 0x10000); m += 0x10000;
-    std::memcpy(g_cell_things, m, 0x20000); m += 0x20000;
-    std::memcpy(g_corner_tex_table, m, sizeof g_corner_tex_table);
+    {
+        const uint8_t *m = wrld ? wrld_maps : maps;
+        const size_t cells = g_world.cells;                     // 0x10000 for a MAPS chunk
+        std::memcpy(g_map_type, m, cells); m += cells;
+        std::memcpy(g_map_height, m, cells); m += cells;
+        std::memcpy(g_map_light, m, cells); m += cells;
+        std::memcpy(g_map_flags, m, cells); m += cells;
+        std::memcpy(g_cell_things, m, cells * 2); m += cells * 2;
+        std::memcpy(g_corner_tex_table, m, sizeof g_corner_tex_table);
+    }
     read_globals(glob);
 
     if (camp && camp_n >= SAVEGAME_FILE_SIZE) {
@@ -485,7 +541,7 @@ bool savestate_load_file(const char *path) {
             for (size_t i = 0; i < e; i++, p += sizeof(ThingImage)) {
                 ThingImage ti;
                 std::memcpy(&ti, p, sizeof ti);
-                thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)));
+                thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)), wrld ? &thi[MC_THING_SLOTS + i] : nullptr);
             }
             std::memcpy(thing_pool_ext_free_stack(), p, e * 4); p += e * 4;
             std::memcpy(thing_pool_ext_active_stack(), p, e * 4);

@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "terrain.h"
 #include "thing.h"
+#include "world.h"
 #include "ui_draw.h"
 #include "level.h"
 #include "gen/dispatch_tables.h"
@@ -183,15 +184,17 @@ void draw_grid(const DebugOverlayCtx &c) {
     if (v.kind == RENDER_VIEW_NONE || !v.frame_known) return;
     const Rect clip = view_frame_rect(c.fb);
     const int R = 10;
-    const int ccx = (v.cam_x >> 8) & 0xff, ccy = (v.cam_y >> 8) & 0xff;
+    // round 11: cells and corners wrap at the world size (world.h); render_project_world takes the nearest
+    // copy on the torus, so the grid is continuous across x = N*256 -> 0
+    const int ccx = world_cx(v.cam_x), ccy = world_cx(v.cam_y);
     const int N = 2 * R + 2;
     std::vector<double> fx((size_t)N * N), fy((size_t)N * N);
     std::vector<uint8_t> ok((size_t)N * N);
     for (int j = 0; j < N; j++)
         for (int i = 0; i < N; i++) {
-            const int cx = (ccx + i - R) & 0xff, cy = (ccy + j - R) & 0xff;
-            const int32_t wx = (int32_t)(((ccx + i - R) * 256) & 0xffff), wy = (int32_t)(((ccy + j - R) * 256) & 0xffff);
-            const int32_t h = (int32_t)g_map_height[mc_cell((unsigned)cx, (unsigned)cy)] * 0x20;
+            const int cx = world_wrap_cell(ccx + i - R), cy = world_wrap_cell(ccy + j - R);
+            const int32_t wx = world_wrap((ccx + i - R) * 256), wy = world_wrap((ccy + j - R) * 256);
+            const int32_t h = (int32_t)g_map_height[world_cell(cx, cy)] * 0x20;
             const size_t k = (size_t)j * N + i;
             ok[k] = world_to_frame(wx, wy, h, &fx[k], &fy[k]) ? 1 : 0;
         }
@@ -208,8 +211,8 @@ void draw_grid(const DebugOverlayCtx &c) {
         double px[4], py[4];
         const int dxs[4] = {0, 1, 1, 0}, dys[4] = {0, 0, 1, 1};
         for (int q = 0; q < 4; q++) {
-            const int x = (cx + dxs[q]) & 0xff, y = (cy + dys[q]) & 0xff;
-            const int32_t h = (int32_t)g_map_height[mc_cell((unsigned)x, (unsigned)y)] * 0x20;
+            const int x = world_wrap_cell(cx + dxs[q]), y = world_wrap_cell(cy + dys[q]);
+            const int32_t h = (int32_t)g_map_height[world_cell(x, y)] * 0x20;
             if (!world_to_frame(x * 256, y * 256, h, &px[q], &py[q])) return;
         }
         for (int q = 0; q < 4; q++) line(c.fb, clip, px[q], py[q], px[(q + 1) & 3], py[(q + 1) & 3], colour);
@@ -266,7 +269,7 @@ bool radar_geometry(const DebugOverlayCtx &c, RadarGeo *g) {
     const PlayerRec &rec = g_state->players[c.local & 7];
     const PosLogEntry &e = rec.log[rec.view_entry % 32];
     const bool lo = g_video_mode_flags == 1;
-    g->cam_x = (int16_t)e.x; g->cam_y = (int16_t)e.y; g->yaw = (int16_t)e.yaw;
+    g->cam_x = world_log_x(c.local & 7, e); g->cam_y = world_log_y(c.local & 7, e); g->yaw = (int16_t)e.yaw;
     g->x = 0; g->y = 0;
     if (c.input_mode == 0 || c.input_mode == 3) {
         if (!g_state->opt_hud_a) return false;
@@ -301,14 +304,14 @@ void draw_occupancy(const DebugOverlayCtx &c) {
     const int dot = (c.input_mode == 2 || c.input_mode == 4) && c.fb.width > 320 ? 2 : 1;
     const uint8_t cols[5] = {ui_colour(15, 15, 15), ui_colour(0, 15, 0), ui_colour(15, 15, 0), ui_colour(15, 4, 0), ui_colour(15, 0, 15)};
     const int slots = thing_pool_slots();
-    for (unsigned cell = 0; cell < 0x10000; cell++) {
+    for (uint32_t cell = 0; cell < g_world.cells; cell++) {
         unsigned idx = g_cell_things[cell];
         if (idx == 0) continue;
         int len = 0;
         for (int budget = 64; idx != 0 && idx < (unsigned)slots && budget > 0; budget--) { len++; idx = thing_at(idx)->cell_next; }
         if (len == 0) continue;
-        const int32_t wx = (int32_t)((cell & 0xff) << 8) + 0x80, wy = (int32_t)((cell >> 8) << 8) + 0x80;
-        const double du = (int16_t)(uint16_t)(wx - g.cam_x), dv = (int16_t)(uint16_t)(wy - g.cam_y);
+        const int32_t wx = (world_cell_x(cell) << 8) + 0x80, wy = (world_cell_y(cell) << 8) + 0x80;
+        const double du = world_signed(wx - g.cam_x), dv = world_signed(wy - g.cam_y);
         const double I = g.w / 2.0 + (co * du + s * dv) / det, R = g.h / 2.0 + (-B * du + A * dv) / det;
         if (g.round) {
             const double ex = (I - g.w / 2.0) / (g.w / 2.0), ey = (R - g.h / 2.0) / (g.h / 2.0);
@@ -419,7 +422,7 @@ void draw_inspector(const DebugOverlayCtx &c) {
     std::vector<std::string> L;
     if (s_inspect >= 0) debug_inspect_lines(s_inspect, &L);
     if (s_cell_x >= 0) {
-        const unsigned cell = mc_cell((unsigned)s_cell_x, (unsigned)s_cell_y);
+        const uint32_t cell = world_cell(s_cell_x, s_cell_y);
         L.push_back(fmt("cell %d,%d type %d height %d light %d flags 0x%02x", s_cell_x, s_cell_y, g_map_type[cell],
                         g_map_height[cell], g_map_light[cell], g_map_flags[cell]));
         std::string things = "  things:";
@@ -479,8 +482,8 @@ void draw_highlights(const DebugOverlayCtx &c) {
             const int dxs[4] = {0, 1, 1, 0}, dys[4] = {0, 0, 1, 1};
             bool ok = true;
             for (int q = 0; q < 4 && ok; q++) {
-                const int x = (s_cell_x + dxs[q]) & 0xff, y = (s_cell_y + dys[q]) & 0xff;
-                ok = world_to_frame(x * 256, y * 256, (int32_t)g_map_height[mc_cell((unsigned)x, (unsigned)y)] * 0x20, &px[q], &py[q]);
+                const int x = world_wrap_cell(s_cell_x + dxs[q]), y = world_wrap_cell(s_cell_y + dys[q]);
+                ok = world_to_frame(x * 256, y * 256, (int32_t)g_map_height[world_cell(x, y)] * 0x20, &px[q], &py[q]);
             }
             if (ok) for (int q = 0; q < 4; q++) line(c.fb, clip, px[q], py[q], px[(q + 1) & 3], py[(q + 1) & 3], ui_col_red());
         }
@@ -575,7 +578,7 @@ bool debug_inspect_alive() {
 }
 void debug_inspect_set_cell(int cx, int cy) {
     if (cx < 0 || cy < 0) { s_cell_x = s_cell_y = -1; return; }
-    s_cell_x = cx & 0xff; s_cell_y = cy & 0xff;
+    s_cell_x = world_wrap_cell(cx); s_cell_y = world_wrap_cell(cy);
 }
 bool debug_inspect_cell(int *cx, int *cy) {
     if (s_cell_x < 0) return false;
@@ -604,8 +607,11 @@ bool debug_inspect_follow_camera(Camera *cam) {
     if (ri.active && ri.prev_pos && s_inspect < ri.prev_count) {
         const int16_t *p = ri.prev_pos[s_inspect];
         const int64_t a = ri.alpha;
-        x = (uint16_t)((uint16_t)p[0] + (int32_t)(((int64_t)(int16_t)(uint16_t)(t->x - (uint16_t)p[0]) * a) >> 16));
-        y = (uint16_t)((uint16_t)p[1] + (int32_t)(((int64_t)(int16_t)(uint16_t)(t->y - (uint16_t)p[1]) * a) >> 16));
+        // prev_pos holds the low 16 bits (render_ext.cpp thing_pos_lerp): back from the current position by
+        // the tick's 16-bit movement, in any world size
+        const int32_t dx = (int16_t)(uint16_t)(t->x - (uint16_t)p[0]), dy = (int16_t)(uint16_t)(t->y - (uint16_t)p[1]);
+        x = world_wrap(t->x - dx + (int32_t)(((int64_t)dx * a) >> 16));
+        y = world_wrap(t->y - dy + (int32_t)(((int64_t)dy * a) >> 16));
         z = (int32_t)p[2] + (int32_t)(((int64_t)((int32_t)t->z - p[2]) * a) >> 16);
     }
     // Orbit (debug_inspect_orbit): starts behind the Thing; yaw 0 looks towards -y, 0x200 towards +x, so
@@ -614,9 +620,9 @@ bool debug_inspect_follow_camera(Camera *cam) {
     const unsigned yaw = (unsigned)s_orb_yaw;
     const int32_t back = (int32_t)(((int64_t)s_orb_dist * mc_cos((unsigned)s_orb_elev)) >> 16);
     const int32_t up = (int32_t)(((int64_t)s_orb_dist * mc_sin((unsigned)s_orb_elev)) >> 16);
-    cam->cam_x = (uint16_t)(x - ((mc_sin(yaw) * back) >> 16));
-    cam->cam_y = (uint16_t)(y + ((mc_cos(yaw) * back) >> 16));
-    const int ground = terrain_sample_height((uint16_t)cam->cam_x, (uint16_t)cam->cam_y);
+    cam->cam_x = world_wrap(x - ((mc_sin(yaw) * back) >> 16));
+    cam->cam_y = world_wrap(y + ((mc_cos(yaw) * back) >> 16));
+    const int ground = terrain_sample_height(cam->cam_x, cam->cam_y);
     cam->cam_z = std::max((int)z + up, ground + 0x100);
     cam->yaw = (int)yaw;
     // The projection cannot tilt: it shifts the horizon (horizon px = pitch * width / 256, render_landscape /
@@ -682,7 +688,8 @@ void debug_inspect_lines(int slot, std::vector<std::string> *out) {
     out->push_back(fmt("class %d %s  type %d %s", t->cls, debug_class_name(t->cls), t->type, mn));
     out->push_back(fmt("state %d %s", t->state, state_name(t->cls, t->state).c_str()));
     out->push_back(fmt("flags %05x  prop %04x  sprite %d frame %d draw %d", t->flags, t->prop_flags, t->sprite, t->frame, t->draw_type));
-    out->push_back(fmt("pos %u,%u z %d  cell %u,%u  ext %d,%d,%d", t->x, t->y, t->z, t->x >> 8, t->y >> 8, t->ext_x, t->ext_y, t->ext_h));
+    out->push_back(fmt("pos %d,%d z %d  cell %d,%d  ext %d,%d,%d", (int)t->x, (int)t->y, t->z, world_cx(t->x), world_cx(t->y), t->ext_x,
+                       t->ext_y, t->ext_h));
     out->push_back(fmt("yaw %03x pitch %03x  speed %d cur %d base %d turn %d", t->yaw & 0x7ff, t->pitch & 0x7ff, t->speed,
                        t->speed_cur, t->speed_base, t->turn_rate));
     out->push_back(fmt("health %d / %d  mana %d total %d cost %d", t->health, t->max_health, t->mana, t->mana_total, t->mana_cost));
@@ -690,7 +697,7 @@ void debug_inspect_lines(int slot, std::vector<std::string> *out) {
     out->push_back(fmt("killer %u attacker %u caster %u mana_owner %u", t->killer, t->last_attacker, t->caster, t->mana_owner));
     out->push_back(fmt("timers a %u b %u  tick %u  aux %d  dur %d  cast %d  zvel %d", t->timer_a, t->timer_b, t->tick, t->aux,
                        t->duration, t->cast_ticks, t->z_vel));
-    out->push_back(fmt("home %u,%u,%d", t->home.x, t->home.y, t->home.z));
+    out->push_back(fmt("home %d,%d,%d", (int)t->home.x, (int)t->home.y, t->home.z));
     std::string dmg;
     for (int k = 0; k < 6; k++)
         if (t->damage_slots[k].amount) dmg += fmt(" [%d]%d@%u", k, t->damage_slots[k].amount, t->damage_slots[k].attacker);
@@ -700,8 +707,8 @@ void debug_inspect_lines(int slot, std::vector<std::string> *out) {
                            d->clear_hi, d->clear_lo, d->sight_radius, d->fov, d->think_period));
     // the cell list the Thing is on
     {
-        const unsigned cell = mc_cell_of(t->x, t->y);
-        std::string s = fmt("cell list %u,%u:", t->x >> 8, t->y >> 8);
+        const uint32_t cell = world_cell_of(t->x, t->y);
+        std::string s = fmt("cell list %d,%d:", world_cx(t->x), world_cx(t->y));
         int n = 0;
         bool found = false;
         unsigned idx = g_cell_things[cell];

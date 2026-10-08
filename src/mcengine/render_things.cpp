@@ -15,6 +15,7 @@
 #include "raster.h"
 #include "terrain.h"
 #include "mc_math.h"
+#include "world.h"
 #include "gen/render_tables.h"
 #include "gen/sprites_tables.h"
 #include <algorithm>
@@ -612,6 +613,8 @@ static void anchor_stage_push(const Thing *t, int32_t zc) {
 static void render_thing(const Thing *t, const VertexRec *cell) {
     SpriteBlit &b = g_sprite_blit;
     b.thing = t;
+    // round 11: the 16-bit difference against the camera's low 16 bits is the exact difference in any world
+    // size (the Thing is on a cell of the 20-cell grid, far inside +-128 cells)
     const int32_t dx = (int16_t)(uint16_t)(t->x - g_rcam.cam_x16);
     const int32_t dy = (int16_t)(uint16_t)(g_rcam.cam_y16 - t->y);
     // Camera space: x to the right, z forward.
@@ -738,7 +741,7 @@ ProjF proj_f(const RenderViewInfo &v) {
         const RenderCamState &r = v.rcam;
         p.focal = r.focal; p.horizon = r.horizon; p.scx = r.screen_cx; p.scy = r.screen_cy;
         p.cr = r.cos_roll / 65536.0; p.sr = r.sin_roll / 65536.0; p.cy = r.cos_yaw / 65536.0; p.sy = r.sin_yaw / 65536.0;
-        p.cam_x = r.cam_x16; p.cam_y = r.cam_y16; p.cam_z = r.cam_z;
+        p.cam_x = v.cam_x; p.cam_y = v.cam_y; p.cam_z = r.cam_z;     // the full world position (capture_view)
         p.radius = std::sqrt((double)(uint32_t)r.cull_dist2);
     } else {
         p.focal = v.focal; p.horizon = v.horizon; p.scx = v.scx; p.scy = v.scy;
@@ -769,7 +772,11 @@ void capture_view(const FrameBuffer &fb, const Camera &cam) {
         v.serial++;
         v.view_w = g_rt_width; v.view_h = g_rt_height;
         v.rcam = g_rcam;
-        v.cam_x = g_rcam.cam_x16; v.cam_y = g_rcam.cam_y16; v.cam_z = g_rcam.cam_z; v.yaw = g_rcam.yaw16;
+        // g_rcam keeps the original's low 16 bits; the full position is the camera passed in plus the slope
+        // nudge render_view added (|nudge| <= 100 units)
+        v.cam_x = world_wrap(cam.cam_x + (int16_t)(uint16_t)(g_rcam.cam_x16 - cam.cam_x));
+        v.cam_y = world_wrap(cam.cam_y + (int16_t)(uint16_t)(g_rcam.cam_y16 - cam.cam_y));
+        v.cam_z = g_rcam.cam_z; v.yaw = g_rcam.yaw16;
         v.cull2 = (double)(uint32_t)g_rcam.cull_dist2;
         v.composed = false;
         v.frame_known = false;
@@ -849,8 +856,15 @@ bool render_project_world(int32_t x, int32_t y, int32_t z, int *sx, int *sy, int
     if (v.kind == RENDER_VIEW_FAITHFUL) {
         // render_thing + thing_project exactly (integer, the original's rounding)
         const RenderCamState &r = v.rcam;
-        const int32_t dx = (int16_t)(uint16_t)((uint16_t)x - r.cam_x16);
-        const int32_t dy = (int16_t)(uint16_t)(r.cam_y16 - (uint16_t)y);
+        // the nearest copy on the torus (exactly the original's 16-bit difference with 256 cells); farther
+        // than 128 cells - only possible in a wider world - is far outside the 20-cell view and would
+        // overflow the integer projection
+        const int32_t dx = world_signed(x - v.cam_x);
+        const int32_t dy = world_signed(v.cam_y - y);
+        if (dx < -0x8000 || dx > 0x7fff || dy < -0x8000 || dy > 0x7fff) {
+            if (depth) *depth = 0;
+            return false;
+        }
         const int32_t xc = (mul32(r.cos_yaw, dx) - mul32(dy, r.sin_yaw)) >> 16;
         const int32_t zc = (mul32(dy, r.cos_yaw) + mul32(dx, r.sin_yaw)) >> 16;
         if (depth) *depth = zc;
@@ -863,8 +877,8 @@ bool render_project_world(int32_t x, int32_t y, int32_t z, int *sx, int *sy, int
     }
     if (v.kind == RENDER_VIEW_EXT) {
         // render_ext.cpp emit_cell_things + project()
-        const double dx = (int16_t)(uint16_t)((uint16_t)x - (uint16_t)v.cam_x);
-        const double dy = (int16_t)(uint16_t)((uint16_t)v.cam_y - (uint16_t)y);
+        const double dx = world_signed(x - v.cam_x);
+        const double dy = world_signed(v.cam_y - y);
         const double xc = v.cyaw * dx - v.syaw * dy, zc = v.cyaw * dy + v.syaw * dx;
         if (depth) *depth = (int)std::lround(zc);
         if (!(zc > 0x40)) return false;
@@ -926,7 +940,7 @@ bool render_pick_ground(int sx, int sy, int *cell_x, int *cell_y, int32_t *wx, i
     auto above = [&](double t) {
         gx = p.cam_x + ux * t; gy = p.cam_y + uy * t;
         const double h = p.cam_z + kh * t;
-        const int ground = terrain_sample_height((uint16_t)(int32_t)std::floor(gx), (uint16_t)(int32_t)std::floor(gy));
+        const int ground = terrain_sample_height(world_wrap((int32_t)std::floor(gx)), world_wrap((int32_t)std::floor(gy)));
         return h > ground;
     };
     const double t_max = p.radius * 1.5;
@@ -945,11 +959,11 @@ bool render_pick_ground(int sx, int sy, int *cell_x, int *cell_y, int32_t *wx, i
     }
     above(t1);
     const int32_t ix = (int32_t)std::floor(gx), iy = (int32_t)std::floor(gy);
-    *cell_x = (ix >> 8) & 0xff;
-    *cell_y = (iy >> 8) & 0xff;
-    if (wx) *wx = (int32_t)(uint16_t)ix;
-    if (wy) *wy = (int32_t)(uint16_t)iy;
-    if (wz) *wz = terrain_sample_height((uint16_t)ix, (uint16_t)iy);
+    *cell_x = world_cx(ix);
+    *cell_y = world_cx(iy);
+    if (wx) *wx = world_wrap(ix);
+    if (wy) *wy = world_wrap(iy);
+    if (wz) *wz = terrain_sample_height(world_wrap(ix), world_wrap(iy));
     return true;
 }
 

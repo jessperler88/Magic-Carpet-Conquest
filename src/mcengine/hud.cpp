@@ -13,6 +13,7 @@
 #include "ui_draw.h"
 #include "mc_globals.h"
 #include "mc_math.h"
+#include "world.h"
 #include "raster.h"
 #include "player.h"
 #include "input.h"
@@ -124,7 +125,8 @@ void ui_draw_radar(int x, int y, int cam_x, int cam_y, int w, int h, int yaw, in
         const int py = y + r;
         uint8_t *row = (py >= 0 && py < g_ui_fb.height) ? g_ui_fb.pixels + py * pitch : nullptr;
         for (int i = 0, n = right - left; i < n; i++) {        // the exe loops 2^32 times for n == 0
-            const uint16_t cell = (uint16_t)((((uint32_t)v >> 8) & 0xff) << 8 | (((uint32_t)u >> 8) & 0xff));
+            // round 11: the cell of (u, v) on the N-cell torus (the original's `& 0xff` of each byte at 256)
+            const uint32_t cell = world_cell((int)((uint32_t)u >> 8), (int)((uint32_t)v >> 8));
             const uint8_t col = shade[(g_map_light[cell] << 8) | avg[g_map_type[cell]]];
             const int px = x + left + i;
             if (row && px >= 0 && px < g_ui_fb.width)
@@ -172,9 +174,11 @@ void ui_draw_radar_blips(int x, int y, int cam_x, int cam_y, int w, int h, int y
     if (P->spell_thing[5] != 0) reveal = thing_at(thing_wrap((unsigned)(int16_t)P->spell_thing[5]))->cast_ticks;
     if (P->castle != 0) {                               // dotted line from the wizard to the castle
         const Thing *castle = thing_at(thing_wrap(P->castle));
-        const int dx0 = (int16_t)(T->x - cam_x), dy0 = (int16_t)(T->y - cam_y);
+        // round 11: torus differences on the N-cell world (the original's (int16_t) at 256); a castle more
+        // than the radar's reach away gives a line from the wizard to the radar's edge in its direction
+        const int dx0 = world_signed(T->x - cam_x), dy0 = world_signed(T->y - cam_y);
         const int px0 = proj_x(dx0, dy0), py0 = proj_y(dx0, dy0);
-        const int dx1 = (int16_t)(castle->x - cam_x), dy1 = (int16_t)(castle->y - cam_y);
+        const int dx1 = world_signed(castle->x - cam_x), dy1 = world_signed(castle->y - cam_y);
         const int px1 = proj_x(dx1, dy1), py1 = proj_y(dx1, dy1);
         const int dist = (int)mc_isqrt((uint32_t)(mul32(px1 - px0, px1 - px0) + mul32(py1 - py0, py1 - py0)));
         const int ang = math_atan2((int16_t)(px1 - px0), (int16_t)(py1 - py0)) & 0xffff;
@@ -235,7 +239,7 @@ void ui_draw_radar_blips(int x, int y, int cam_x, int cam_y, int w, int h, int y
         default: break;
         }
         if (!sym) continue;
-        const int dx = (int16_t)(t->x - cam_x), dy = (int16_t)(t->y - cam_y);
+        const int dx = world_signed(t->x - cam_x), dy = world_signed(t->y - cam_y);
         int px = proj_x(dx, dy), py = proj_y(dx, dy);
         if (!blip_inside(px, py, w, h)) continue;
         if (sym <= 1) {
@@ -265,7 +269,7 @@ void ui_draw_radar_blips(int x, int y, int cam_x, int cam_y, int w, int h, int y
             if (q == g_state->local_player) continue;
             const Thing *t2 = thing_at(thing_wrap(g_state->players[q].thing));
             if (t2->health < 0) continue;
-            const int dx = (int16_t)(t2->x - cam_x), dy = (int16_t)(t2->y - cam_y);
+            const int dx = world_signed(t2->x - cam_x), dy = world_signed(t2->y - cam_y);
             const int px = proj_x(dx, dy), py = proj_y(dx, dy);
             if (!blip_inside(px, py, w, h)) continue;
             const uint8_t col = g_hud_player_colours[(pblock(t2)->player_no * 2 + 1) & 15];
@@ -298,20 +302,22 @@ void ui_draw_map(int x, int y, int w, int h, int cam_x, int cam_y) {
     if (!g_ui_fb.pixels || w <= 0 || h <= 0) return;
     const uint8_t *shade = g_shade_table(), *blend = g_blend_table(), *avg = g_tex_avg_colour();
     const int pitch = g_ui_fb.width;
-    uint8_t cx0 = (uint8_t)((cam_x >> 8) - w / 2), cy = (uint8_t)((cam_y >> 8) - h / 2);
-    auto col = [&](uint8_t cxx, uint8_t cyy) { const uint16_t cell = mc_cell(cxx, cyy); return shade[(g_map_light[cell] << 8) | avg[g_map_type[cell]]]; };
+    // round 11: cell coordinates wrap at the world size (world_cell; the original's uint8_t at 256)
+    const int cx0 = world_wrap_cell((cam_x >> 8) - w / 2);
+    int cy = world_wrap_cell((cam_y >> 8) - h / 2);
+    auto col = [&](int cxx, int cyy) { const uint32_t cell = world_cell(cxx, cyy); return shade[(g_map_light[cell] << 8) | avg[g_map_type[cell]]]; };
     auto put = [&](int px, int py, uint8_t v) { if (px >= 0 && py >= 0 && px < g_ui_fb.width && py < g_ui_fb.height) g_ui_fb.pixels[py * pitch + px] = v; };
     auto get = [&](int px, int py) -> uint8_t { return (px >= 0 && py >= 0 && px < g_ui_fb.width && py < g_ui_fb.height) ? g_ui_fb.pixels[py * pitch + px] : 0; };
     if (ui_lo_res()) {
         for (int r = 0; r < h; r++, cy++)
-            for (int k = 0; k < w; k++) put(x + k, y + r, col((uint8_t)(cx0 + k), cy));
+            for (int k = 0; k < w; k++) put(x + k, y + r, col(cx0 + k, cy));
         return;
     }
     const int X = x * 2, Y = y * 2;
     for (int r = 0; r < h; r++, cy++) {                 // even screen lines: 2 pixels per cell
         uint8_t prev = 0;
         for (int k = 0; k < w; k++) {
-            const uint8_t c = col((uint8_t)(cx0 + k), cy);
+            const uint8_t c = col(cx0 + k, cy);
             put(X + 2 * k + 1, Y + 2 * r, c);
             put(X + 2 * k, Y + 2 * r, (r & 1) ? blend[(prev << 8) | c] : blend[(c << 8) | prev]);
             prev = c;
@@ -709,7 +715,11 @@ static void map_screen(const FrameBuffer &fb, int local, const Camera &cam) {
     }
     const int unused = fb.width - 0xc0;                 // DAT_0012ed80 - 0xc0
     const PosLogEntry &e = g_state->players[local].log[g_state->players[local].view_entry % 32];
-    const int cx = (int16_t)e.x, cy = (int16_t)e.y, yaw = (int16_t)e.yaw;
+    // round 11: the camera log through world_log_x / y (the full coordinate; the original sign-extends the
+    // u16, which addresses the same cells of the 256 world). Scale 0xaa over 0x17e px is the whole 256-cell
+    // world; in a wider world the map screen stays at that scale and shows the 254-cell window centred on
+    // the player (the radar painter wraps on the torus, the blips use the shortest torus difference).
+    const int cx = world_log_x(local, e), cy = world_log_y(local, e), yaw = (int16_t)e.yaw;
     ui_draw_radar(0, 0, cx, cy, 0x17e, lo1() ? 0x17a : 0x19e, yaw, 0xaa, unused, 1);
     ui_draw_radar_blips(0, 0, cx, cy, 0x17e, lo1() ? 0x17e : 0x19e, yaw, 0xaa, unused, 1);
     if (g_mouse_y >= 0x17e) ui_draw_player_list();
@@ -775,8 +785,9 @@ static void frame_pass(const FrameBuffer &fb, int player) {
                 // port: g_settings.radar_round - 320x200 rows are 6/5 as tall as the columns are wide on a
                 // 4:3 display, so 64 x 54 is a circle; ui_draw_radar steps the map by h / w per column already
                 const int radar_h = (g_settings.radar_round && lo1()) ? 0x6c : 0x80;
-                ui_draw_radar(0, 0, (int16_t)e.x, (int16_t)e.y, 0x80, radar_h, (int16_t)e.yaw, radar_scale, unused, 0);
-                ui_draw_radar_blips(0, 0, (int16_t)e.x, (int16_t)e.y, 0x80, radar_h, (int16_t)e.yaw, radar_scale, unused, 0);
+                const int ex = world_log_x(local, e), ey = world_log_y(local, e);   // round 11 (see map_screen)
+                ui_draw_radar(0, 0, ex, ey, 0x80, radar_h, (int16_t)e.yaw, radar_scale, unused, 0);
+                ui_draw_radar_blips(0, 0, ex, ey, 0x80, radar_h, (int16_t)e.yaw, radar_scale, unused, 0);
             }
             if (s_drawing && g_key_down[0x38] && g_key_down[0x2d]) debug_screenshot(g_hud_screenshot_dir);   // Alt+X
             ui_set_font(1);

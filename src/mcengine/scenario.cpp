@@ -6,6 +6,7 @@
 #include "mc_globals.h"
 #include "mcfile.h"
 #include "level.h"
+#include "world.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -124,16 +125,20 @@ bool parse_int(const std::string &s, int *v) {
     return true;
 }
 // A coordinate: cells (cell centre) or world units with a `w` suffix. Result in world units.
+// Round 11: masked to the largest world (MC_WORLD_MAX cells, 20 bits of units) instead of 256 cells - a
+// command is parsed before the world it runs in may exist; the packet / the store wraps it onto the world
+// (identical to the old & 0xff / & 0xffff in a 256-cell world).
 bool parse_coord(const std::string &s, int *world) {
+    constexpr int kUnitMask = MC_WORLD_MAX * 256 - 1, kCellMask = MC_WORLD_MAX - 1;
     if (s.size() > 1 && (s.back() == 'w' || s.back() == 'W')) {
         int v;
         if (!parse_int(s.substr(0, s.size() - 1), &v)) return false;
-        *world = v & 0xffff;
+        *world = v & kUnitMask;
         return true;
     }
     int c;
     if (!parse_int(s, &c)) return false;
-    *world = ((c & 0xff) << 8) | 0x80;
+    *world = ((c & kCellMask) << 8) | 0x80;
     return true;
 }
 
@@ -846,7 +851,7 @@ bool cmd_check(const Assertion &a, std::string *detail) {
     case AssertKind::POS: {
         const Thing *t = who_thing(a.who);
         if (!t) { std::snprintf(b, sizeof b, "%s: nothing there", who_text(a.who).c_str()); break; }
-        const int dx = std::abs((int)(int16_t)(uint16_t)(t->x - a.x)), dy = std::abs((int)(int16_t)(uint16_t)(t->y - a.y));
+        const int dx = std::abs(world_signed(t->x - a.x)), dy = std::abs(world_signed(t->y - a.y));   // round 11: was (int16_t)
         ok = dx <= a.r && dy <= a.r;
         std::snprintf(b, sizeof b, "%s at %d,%d (cell %d,%d), wanted %d,%d +- %d", who_text(a.who).c_str(), (int)t->x, (int)t->y, t->x >> 8, t->y >> 8,
                       a.x, a.y, a.r);
@@ -1098,13 +1103,13 @@ int wrap_angle(int a) {
 // generation (what a player's hand would do), recorded in the packet: floating point is fine here.
 void face_point(const Thing *t, int x, int y, int z, bool z_given, int8_t *sx, int8_t *sy) {
     const PlayerBlock *P = player_block(const_cast<Thing *>(t));
-    Pos to{(uint16_t)x, (uint16_t)y, (int16_t)z};
+    Pos to{x, y, (int16_t)z};                   // round 11: WCoord wraps (was (uint16_t))
     if (!z_given) to.z = (int16_t)terrain_height_at(&to);
     const int want = pos_angle_to(thing_pos(t), &to);
     const int diff = wrap_angle(want - (int)t->yaw);
     const double v = diff / 2.0 - P->yaw_rate / 2.0;
     *sx = (int8_t)clamp127(v);
-    const double dx = (double)(int16_t)(to.x - t->x), dy = (double)(int16_t)(to.y - t->y);
+    const double dx = (double)world_signed(to.x - t->x), dy = (double)world_signed(to.y - t->y);
     const double dist = std::sqrt(dx * dx + dy * dy);
     const double dz = (double)t->z - (double)to.z;
     const double pitch = std::atan2(dz, dist < 1 ? 1 : dist) * 0x400 / 3.14159265358979;
@@ -1156,7 +1161,7 @@ void ScenarioRunner::local_input() {
             face_point(t, l.a, l.b, 0, false, &sx, &sy);
             sy = 0;
             steer = true;
-            Pos to{(uint16_t)l.a, (uint16_t)l.b, 0};
+            Pos to{l.a, l.b, 0};
             const int d = pos_dist_xy(thing_pos(t), &to);
             if (d > 0x600) bits |= P->target_speed < 0x30 ? 1 : 0;
             else if (P->target_speed > 0) bits |= 2;

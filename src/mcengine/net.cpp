@@ -606,11 +606,18 @@ uint32_t state_checksum(NetChecksumParts *parts) {
             H.add(part, hi, sizeof hi);
         }
     }
-    H.add(NCP_MAP_TYPE, g_map_type, MC_MAP_CELLS);
-    H.add(NCP_MAP_HEIGHT, g_map_height, MC_MAP_CELLS);
-    H.add(NCP_MAP_LIGHT, g_map_light, MC_MAP_CELLS);
-    H.add(NCP_MAP_FLAGS, g_map_flags, MC_MAP_CELLS);
-    H.add(NCP_CELL_HEADS, g_cell_things, sizeof(uint16_t) * MC_MAP_CELLS);
+    // Round 11: the maps of the world (g_world.cells cells; 0x10000 = the original's bytes with 256 cells). A
+    // wider world also hashes its size first, so peers with different world sizes differ in "map.type" at once
+    // (the camera log is not hashed at any size, its high halves neither).
+    if (wide) {
+        const uint32_t size = (uint32_t)g_world.size;
+        H.add(NCP_MAP_TYPE, &size, sizeof size);
+    }
+    H.add(NCP_MAP_TYPE, g_map_type, g_world.cells);
+    H.add(NCP_MAP_HEIGHT, g_map_height, g_world.cells);
+    H.add(NCP_MAP_LIGHT, g_map_light, g_world.cells);
+    H.add(NCP_MAP_FLAGS, g_map_flags, g_world.cells);
+    H.add(NCP_CELL_HEADS, g_cell_things, sizeof(uint16_t) * g_world.cells);
     // Phase 4: the game mode's block (mode.h), only while a mode runs - the original's checksum is unchanged.
     if (mode_active()) {
         H.h = mode_checksum(H.h);

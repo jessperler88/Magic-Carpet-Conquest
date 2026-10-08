@@ -6,6 +6,7 @@
 #include "mc_globals.h"
 #include "mc_math.h"
 #include "level.h"
+#include "world.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -158,17 +159,17 @@ void apply_spawn(int sender, const CmdPacket *p) {
     if (count > 64) count = 64;
     int cx, cy;
     if (b(p, 6) & 1) {
-        cx = b(p, 3);
-        cy = b(p, 4);
+        cx = world_wrap_cell(b(p, 3) | (b(p, 9) & 0x0f) << 8);  // round 11: b9 = the cells' high nibbles (debug_cmd.h)
+        cy = world_wrap_cell(b(p, 4) | (b(p, 9) >> 4) << 8);
     } else {
         Thing *w = wizard_of(target_of(sender, b(p, 7)));
         if (!w) { say("spawn: no wizard to spawn in front of"); return; }
         const int ahead = (b(p, 8) ? b(p, 8) : 4) * 0x100;
         // yaw 0 looks towards -y, 0x200 towards +x (render.h); mc_sin / mc_cos are 16.16
-        const int x = (int)w->x + (int)(((int64_t)mc_sin(w->yaw) * ahead) >> 16);
-        const int y = (int)w->y - (int)(((int64_t)mc_cos(w->yaw) * ahead) >> 16);
-        cx = (x >> 8) & 0xff;
-        cy = (y >> 8) & 0xff;
+        const int32_t x = (int32_t)w->x + (int32_t)(((int64_t)mc_sin(w->yaw) * ahead) >> 16);
+        const int32_t y = (int32_t)w->y - (int32_t)(((int64_t)mc_cos(w->yaw) * ahead) >> 16);
+        cx = world_cx(x);                               // round 11: was (x >> 8) & 0xff
+        cy = world_cx(y);
     }
     if (!thing_table_b_enabled(cls, type)) { say("spawn: class %d type %d has no constructor", cls, type); return; }
     const int before = thing_pool_live_count();
@@ -179,8 +180,8 @@ void apply_spawn(int sender, const CmdPacket *p) {
         std::memset(&rec, 0, sizeof rec);
         rec.cls = (uint16_t)cls;
         rec.model = (uint16_t)type;
-        rec.x = (uint16_t)((cx + i % side - side / 2) & 0xff);
-        rec.y = (uint16_t)((cy + i / side - side / 2) & 0xff);
+        rec.x = (uint16_t)world_wrap_cell(cx + i % side - side / 2);     // ThingInit cells are u16 (< 4096)
+        rec.y = (uint16_t)world_wrap_cell(cy + i / side - side / 2);
         level_spawn_thing_record(&rec);
     }
     say("spawned %d x %s %s (%d,%d) at cell %d,%d: %d new Things", count, class_name(cls), model_name(cls, type), cls, type, cx,
@@ -197,7 +198,13 @@ CmdPacket debug_cmd_teleport(int x, int y, int z, int target) {
     put16(&p, 3, x);
     put16(&p, 5, y);
     put16(&p, 7, z == DEBUG_Z_GROUND ? 0 : z);
+    // round 11: bits 16..19 of x / y (a world up to 4096 cells = 2^20 units; 0 in a 256-cell world)
+    reinterpret_cast<uint8_t *>(&p)[9] = (uint8_t)((((uint32_t)x >> 16) & 0x0f) | ((((uint32_t)y >> 16) & 0x0f) << 4));
     return p;
+}
+namespace {
+int32_t teleport_x(const CmdPacket *p) { return get16u(p, 3) | (b(p, 9) & 0x0f) << 16; }
+int32_t teleport_y(const CmdPacket *p) { return get16u(p, 5) | (b(p, 9) >> 4) << 16; }
 }
 CmdPacket debug_cmd_spawn(int cls, int type, int cx, int cy, bool at_cell, int count, int target, int ahead) {
     CmdPacket p = packet(DEBUG_CMD_SPAWN);
@@ -210,6 +217,8 @@ CmdPacket debug_cmd_spawn(int cls, int type, int cx, int cy, bool at_cell, int c
     q[6] = at_cell ? 1 : 0;
     q[7] = (uint8_t)target;
     q[8] = (uint8_t)(ahead < 0 ? 0 : ahead > 255 ? 255 : ahead);
+    // round 11: bits 8..11 of the cells (a world up to 4096 cells; 0 in a 256-cell world)
+    q[9] = at_cell ? (uint8_t)((((unsigned)cx >> 8) & 0x0f) | ((((unsigned)cy >> 8) & 0x0f) << 4)) : 0;
     return p;
 }
 CmdPacket debug_cmd_give_mana(int amount, int where, int target) {
@@ -304,11 +313,12 @@ std::string debug_cmd_describe(const CmdPacket &pk) {
     };
     switch (pk.cmd) {
     case DEBUG_CMD_TELEPORT:
-        if (pk.pad2 & 1) std::snprintf(buf, sizeof buf, "teleport %s -> %d,%d z %d", who(pk.arg), get16u(p, 3), get16u(p, 5), get16s(p, 7));
-        else std::snprintf(buf, sizeof buf, "teleport %s -> %d,%d (ground)", who(pk.arg), get16u(p, 3), get16u(p, 5));
+        if (pk.pad2 & 1) std::snprintf(buf, sizeof buf, "teleport %s -> %d,%d z %d", who(pk.arg), teleport_x(p), teleport_y(p), get16s(p, 7));
+        else std::snprintf(buf, sizeof buf, "teleport %s -> %d,%d (ground)", who(pk.arg), teleport_x(p), teleport_y(p));
         break;
     case DEBUG_CMD_SPAWN:
-        if (b(p, 6) & 1) std::snprintf(buf, sizeof buf, "spawn %d x class %d type %d at cell %d,%d", b(p, 5), pk.arg, pk.pad2, b(p, 3), b(p, 4));
+        if (b(p, 6) & 1) std::snprintf(buf, sizeof buf, "spawn %d x class %d type %d at cell %d,%d", b(p, 5), pk.arg, pk.pad2,
+                                       b(p, 3) | (b(p, 9) & 0x0f) << 8, b(p, 4) | (b(p, 9) >> 4) << 8);
         else std::snprintf(buf, sizeof buf, "spawn %d x class %d type %d %d cells in front of %s", b(p, 5), pk.arg, pk.pad2, b(p, 8) ? b(p, 8) : 4, who(b(p, 7)));
         break;
     case DEBUG_CMD_GIVE_MANA:
@@ -366,12 +376,13 @@ void debug_cmd_apply(int sender, Thing *, CmdPacket *cmd) {
         Thing *w = wizard_of(target);
         if (!w || w->health < 0) { say("teleport: player %d has no living wizard", target); break; }
         Pos pos;
-        pos.x = (uint16_t)get16u(p, 3);
-        pos.y = (uint16_t)get16u(p, 5);
+        pos.x = teleport_x(p);                          // round 11: + b9's high nibbles, WCoord wraps
+        pos.y = teleport_y(p);
         pos.z = (cmd->pad2 & 1) ? (int16_t)get16s(p, 7) : (int16_t)(terrain_height_at(&pos) + 0x100);
         thing_move_to(w, &pos);
         player_log_position(&g_state->players[target], w);
-        say("teleported player %d to %d,%d z %d (cell %d,%d)", target, pos.x, pos.y, pos.z, pos.x >> 8, pos.y >> 8);
+        say("teleported player %d to %d,%d z %d (cell %d,%d)", target, (int)pos.x, (int)pos.y, pos.z, (int)pos.x >> 8,
+            (int)pos.y >> 8);
         break;
     }
     case DEBUG_CMD_SPAWN:

@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "mc_globals.h"
 #include "level.h"
+#include "world.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -97,6 +98,13 @@ void mode_dump_json(std::string *out, long ticks_run, const char *extra_members)
     j.kvu("mode_id", g_mode.mode);
     j.kvu("seed", mode_active() ? g_mode.params.seed : 0u);
     j.kvh("checksum", net_state_checksum());
+    {   // round 11: the world (world.h); positions below are int32 world units 0 .. units-1
+        j.obj("world");
+        j.kv("size", g_world.size);
+        j.kv("units", g_world.units);
+        j.kvu("cells", g_world.cells);
+        j.close('}');
+    }
     // TODO(round 10 task E): the named parts of NetChecksumParts (net.h net_state_checksum_parts) go here as
     // {"<part name>": "0x%08x", ...} once they exist.
     j.key("checksum_parts"); j.null();
@@ -163,8 +171,8 @@ void mode_dump_json(std::string *out, long ticks_run, const char *extra_members)
         j.kv("max_health", has_thing ? t->max_health : 0);
         j.kv("mana", has_thing ? t->mana_total : 0);
         j.kv("wizard_mana", P.mana);
-        j.kv("x", has_thing ? t->x : 0);
-        j.kv("y", has_thing ? t->y : 0);
+        j.kv("x", has_thing ? (int32_t)t->x : 0);
+        j.kv("y", has_thing ? (int32_t)t->y : 0);
         j.kv("z", has_thing ? t->z : 0);
         j.kv("ai_mode", P.ai_mode);
         j.kv("kills", P.kills);

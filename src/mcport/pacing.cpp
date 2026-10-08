@@ -41,7 +41,15 @@ int pace_lerp_roll(int a, int b, uint32_t alpha) {
     return b - (int)(((int64_t)wrap_diff_angle(a, b) * (0x10000 - alpha)) >> 16);
 }
 
-static int abs16(int d) { d = (int16_t)(uint16_t)d; return d < 0 ? -d : d; }
+// Round 11: a world wider than 256 cells - the camera keeps the whole coordinate (world.h).
+static int pace_lerp_w(int a, int b, uint32_t alpha) {
+    if (alpha == 0) return world_wrap(a);
+    if (alpha >= 0x10000) return world_wrap(b);
+    const int d = world_signed(b - a);
+    return world_wrap(a + (int)(((int64_t)d * alpha) >> 16));
+}
+
+static int abs16(int d) { d = world_wide() ? world_signed(d) : (int16_t)(uint16_t)d; return d < 0 ? -d : d; }
 
 bool pace_camera_jump(const Camera &a, const Camera &b) {
     return abs16(b.cam_x - a.cam_x) > PACE_JUMP_XY || abs16(b.cam_y - a.cam_y) > PACE_JUMP_XY ||
@@ -52,9 +60,14 @@ Camera pace_lerp_camera(const Camera &a, const Camera &b, uint32_t alpha, bool m
     if (alpha >= 0x10000 || pace_camera_jump(a, b)) return b;
     if (alpha == 0) return a;
     Camera c;
-    c.cam_x = pace_lerp16(a.cam_x, b.cam_x, alpha);
-    c.cam_y = pace_lerp16(a.cam_y, b.cam_y, alpha);
-    if (masked_xy) { c.cam_x &= 0xffff; c.cam_y &= 0xffff; }
+    if (world_wide()) {
+        c.cam_x = pace_lerp_w(a.cam_x, b.cam_x, alpha);
+        c.cam_y = pace_lerp_w(a.cam_y, b.cam_y, alpha);
+    } else {
+        c.cam_x = pace_lerp16(a.cam_x, b.cam_x, alpha);
+        c.cam_y = pace_lerp16(a.cam_y, b.cam_y, alpha);
+        if (masked_xy) { c.cam_x &= 0xffff; c.cam_y &= 0xffff; }
+    }
     c.yaw = pace_lerp_angle(a.yaw, b.yaw, alpha);        // the renderer masks yaw with 0x7ff
     c.cam_z = pace_lerp(a.cam_z, b.cam_z, alpha);
     c.pitch = pace_lerp(a.pitch, b.pitch, alpha);

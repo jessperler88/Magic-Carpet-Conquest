@@ -52,6 +52,15 @@ void hover_toward(Thing *t, int target_z) {
     t->z = (int16_t)((int16_t)t->z + (int16_t)desc->z_step * isign(d));
 }
 
+// pos_dist_sq_xy as the nearest searches compare it: unsigned. With 256 cells the original's uint32 of
+// the int32 sum (0x80000000 at exactly 128 cells on both axes); a wider world's int64 square as is.
+inline uint64_t dist_sq_u(const Pos *a, const Pos *b) {
+    const int64_t d = pos_dist_sq_xy(a, b);
+    return d < 0 ? (uint64_t)(uint32_t)d : (uint64_t)d;
+}
+// The original's 0xffffffff "none yet" (no 256-world distance reaches it); 64-bit for a wider world.
+constexpr uint64_t kFarSq = ~(uint64_t)0;
+
 // Walks a Config list (player_list, mana_ball_list, projectile_list, creature_lists[]).
 struct ListWalk {
     uint32_t idx;
@@ -93,12 +102,12 @@ Thing *ai_get_spell_thing(const Thing *t, int spell) {
 Thing *player_find_nearest_by_type(const Thing *t, int type) {
     type &= 0xff;
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     if (type == 0xff) {
         for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
             Thing *p = w.get();
             if (p->owner == t->owner) continue;
-            uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+            uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
             if (d < best_d) { best = p; best_d = d; }
         }
     } else if (type == 0 || type == 2 || type == 3) {
@@ -106,7 +115,7 @@ Thing *player_find_nearest_by_type(const Thing *t, int type) {
             Thing *p = w.get();
             if (p->owner == t->owner) continue;
             if ((int8_t)p->type != type) continue;
-            uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+            uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
             if (d < best_d) { best = p; best_d = d; }
         }
     }
@@ -117,12 +126,12 @@ Thing *player_find_nearest_by_type(const Thing *t, int type) {
 // neither thing's nor excl's.
 Thing *player_find_nearest_wizard_excl(const Thing *t, const Thing *excl) {
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (p->owner == t->owner || p->owner == excl->owner) continue;
         if (p->type != 0 && p->type != 1) continue;
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     return best;
@@ -131,12 +140,12 @@ Thing *player_find_nearest_wizard_excl(const Thing *t, const Thing *excl) {
 // player_find_nearest_castle_excl_14010(thing, excl)
 Thing *player_find_nearest_castle_excl(const Thing *t, const Thing *excl) {
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (p->owner == t->owner || p->owner == excl->owner) continue;
         if (p->type != 2) continue;
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     return best;
@@ -524,11 +533,11 @@ void ai_record_threat_from_projectiles() {
 // ai_find_incoming_projectile_153b0: nearest projectile homing on this wizard, within 20 cells.
 Thing *ai_find_incoming_projectile(const Thing *t) {
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->projectile_list); w.ok(); w.next()) {
         Thing *proj = w.get();
         if ((int)proj->target != (int)(int16_t)t->owner) continue;
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(proj));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(proj));
         if (d < best_d) { best_d = d; best = proj; }
     }
     return best_d < 0x1900000u ? best : nullptr;
@@ -568,18 +577,18 @@ Thing *ai_find_mana_ball_target(Thing *t) {
     const Pos *castle_pos = thing_pos(castle);
     const Pos *self_pos = thing_pos(t);
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->mana_ball_list); w.ok(); w.next()) {
         Thing *ball = w.get();
         Thing *owner = thing_ref(ball->mana_owner);
-        uint32_t d;
+        uint64_t d;
         if (owner->cls != 3) {
-            d = (uint32_t)pos_dist_sq_xy(self_pos, thing_pos(ball));
+            d = dist_sq_u(self_pos, thing_pos(ball));
         } else {
             if (ball->mana_owner == (uint16_t)(int16_t)t->owner) continue;
             int threat = threat_of(P, player_block(owner)->player_no);
             if (hostility_threshold(owner, P) < threat) {
-                d = (uint32_t)pos_dist_sq_xy(castle_pos, thing_pos(ball));
+                d = dist_sq_u(castle_pos, thing_pos(ball));
             } else {
                 Thing *wiz = player_find_nearest_wizard_excl(ball, t);
                 if (!wiz) continue;
@@ -587,7 +596,7 @@ Thing *ai_find_mana_ball_target(Thing *t) {
                                                     : player_find_nearest_castle_excl(ball, castle);
                 if (t->owner != wiz->owner && pos_dist_sq_xy(thing_pos(ball), thing_pos(wiz)) <= 0x1900000) continue;
                 if (near_castle && thing_collide(ball, near_castle)) continue;
-                d = (uint32_t)pos_dist_sq_xy(self_pos, thing_pos(ball));
+                d = dist_sq_u(self_pos, thing_pos(ball));
             }
         }
         if (d < best_d) { best = ball; best_d = d; }
@@ -606,18 +615,25 @@ int ai_find_castle_site(Thing *t) {
     if (!ai_can_afford_spell(t, 0x10)) return 0;
     Thing *scratch = thing_at(0);
     scratch->owner = t->owner;
-    int qx0 = (int16_t)t->x / 0x4000, qy0 = (int16_t)t->y / 0x4000;
+    // Round 11: the quadrants are a quarter of the world per axis (0x4000 units = 64 cells with 256
+    // cells). The original's signed (int16_t)x / 0x4000 is world_signed(x) / quadrant (truncating, so
+    // the start quadrant of the upper half is -2 / -1 / 0 as in the original); the corner is
+    // (q & 3) * quadrant, the "centre" cell (q & 3) * (size / 4) + size / 8 - 1 (0x1f with 256 cells).
+    // The 0x3000 Chebyshev clearance is a game range and stays.
+    const int32_t quad = g_world.units / 4;
+    const int quad_cells = g_world.size / 4, centre_cell = g_world.size / 8 - 1;
+    int qx0 = world_signed(t->x) / quad, qy0 = world_signed(t->y) / quad;
     for (int qy = qy0; (int16_t)qy < (int16_t)(qy0 + 4); qy++) {
         for (int qx = qx0; (int16_t)qx < (int16_t)(qx0 + 4); qx++) {
-            scratch->x = (uint16_t)((qx & 3) << 14);                // quadrant corner
-            scratch->y = (uint16_t)((qy & 3) << 14);
+            scratch->x = (qx & 3) * quad;                           // quadrant corner
+            scratch->y = (qy & 3) * quad;
             Thing *c = player_find_nearest_by_type(scratch, 2);
             if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
                 t->home = *thing_pos(scratch);
                 return 1;
             }
-            scratch->x = (uint16_t)((((qx & 3) << 6) + 0x1f) << 8);   // quadrant centre
-            scratch->y = (uint16_t)((((qy & 3) << 6) + 0x1f) << 8);
+            scratch->x = ((qx & 3) * quad_cells + centre_cell) << 8;   // quadrant centre
+            scratch->y = ((qy & 3) * quad_cells + centre_cell) << 8;
             c = player_find_nearest_by_type(scratch, 2);
             if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
                 t->home = *thing_pos(scratch);
@@ -684,7 +700,7 @@ int ai_goal_attack_castle(Thing *t) {
     PlayerBlock *P = player_block(t);
     if (P->castle == 0 && ai_get_spell_thing(t, 0x10)) return 0;
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (p->owner == t->owner || p->type != 2) continue;
@@ -697,7 +713,7 @@ int ai_goal_attack_castle(Thing *t) {
         if (!candidate) {
             if ((255 - P->ai_aggression) * 0x280 + p->mana >= thing_ref(P->castle)->mana) continue;
         }
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     if (!best) return 0;
@@ -713,7 +729,7 @@ int ai_goal_attack_wizard(Thing *t) {
     PlayerBlock *P = player_block(t);
     if (P->castle == 0 && ai_get_spell_thing(t, 0x10)) return 0;
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (p->owner == t->owner) continue;
@@ -730,7 +746,7 @@ int ai_goal_attack_wizard(Thing *t) {
             if (!ai_get_spell_thing(p, 0x10)) continue;
             if (((255 - P->ai_aggression) << 5) + p->mana >= t->mana) continue;
         }
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     if (!best) return 0;
@@ -745,7 +761,7 @@ int ai_goal_attack_type3(Thing *t) {
     if (!ai_has_any_attack_spell(t)) return 0;
     PlayerBlock *P = player_block(t);
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (p->owner == t->owner || p->type != 3) continue;
@@ -755,7 +771,7 @@ int ai_goal_attack_type3(Thing *t) {
         if (hostility_threshold(owner, P) >= threat) continue;
         if ((0x113 - P->ai_aggression) * 10 >= p->mana) continue;
         if (thing_collide(p, thing_ref(Q->castle))) continue;
-        uint32_t d = (uint32_t)pos_dist_sq_xy(thing_pos(t), thing_pos(p));
+        uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     if (!best) return 0;
@@ -795,12 +811,12 @@ int ai_goal_hunt_creature(Thing *t) {
     Thing *castle = thing_or_null(player_block(t)->castle);
     const Pos *origin = thing_pos(castle ? castle : t);
     Thing *best = nullptr;
-    uint32_t best_d = 0xffffffffu;
+    uint64_t best_d = kFarSq;
     for (int list = 0; list < 20; list++) {
         for (ListWalk w(g_cfg->creature_lists[list]); w.ok(); w.next()) {
             Thing *c = w.get();
             if (c->owner == t->owner || c->mana <= 0) continue;
-            uint32_t d = (uint32_t)pos_dist_sq_xy(origin, thing_pos(c));
+            uint64_t d = dist_sq_u(origin, thing_pos(c));
             if (d < best_d) { best = c; best_d = d; }
         }
     }

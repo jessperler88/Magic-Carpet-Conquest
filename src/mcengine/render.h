@@ -3,7 +3,8 @@
 #include <cstdint>
 
 // Camera as render_frame_1fab0 passes it (from the player's position-history entry):
-// cam_x / cam_y are 16-bit world coordinates (cell in the high byte), yaw/pitch/roll are angle units
+// cam_x / cam_y are world coordinates (cell = value >> 8; the original's 16 bits, round 11: the renderers wrap
+// them at g_world.units, so a 16-bit or sign-extended value means the same in the 256 world), yaw/pitch/roll are angle units
 // (0..0x7ff), cam_z is the world height (+0x80 above the player), zoom is the focal scale (0x100 = 1.0).
 // yaw 0 looks towards decreasing y, 0x200 towards increasing x (quadrant q = ((yaw+0x100)>>9)&3).
 // pitch is a horizon offset in 1/256 of the view width (horizon = height/2 + pitch*width/256), roll
@@ -183,8 +184,8 @@ struct RenderViewInfo {
 };
 const RenderViewInfo &render_view_info();
 
-// The camera-space point (forward distance `depth`, world units) of world position x / y (16-bit,
-// wrap-aware: the nearest copy on the torus) / z (world height) projected with the last view, in view
+// The camera-space point (forward distance `depth`, world units) of world position x / y (world units,
+// wrap-aware: the nearest copy on the N-cell torus) / z (world height) projected with the last view, in view
 // space. False when the point is not in front of the camera (depth <= 0x40, the renderers' thing cull)
 // or no view was recorded; sx / sy may lie outside the view.
 bool render_project_world(int32_t x, int32_t y, int32_t z, int *sx, int *sy, int *depth);

@@ -1,6 +1,7 @@
 // Run-time terrain painting of carpet.exe: slope orientation, paint kinds, quad / rectangle
 // retexturing, the per-cell height modifiers and the spiral ("search.dat") area walkers.
-// Owner: terrain_paint.cpp. Cells are packed (y << 8) | x as everywhere else.
+// Owner: terrain_paint.cpp. Cells are world_cell(x, y) indices (world.h; (y << 8) | x in the original's
+// 256-cell world); cell arguments are wrapped onto the map, cell coordinates wrap on the world torus.
 #pragma once
 #include <cstdint>
 #include "thing.h"

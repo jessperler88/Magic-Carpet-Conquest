@@ -81,7 +81,8 @@ struct RenderExtStats {
 };
 extern RenderExtStats g_render_ext_stats;
 // Test hook (null by default): when set, every terrain quad of render_view_ext increments the count of
-// the map cells it covers (65536 entries, saturating) - "no cell drawn twice".
+// the map cells it covers (g_world.cells entries - 65536 in the original's world - indexed by world_cell,
+// saturating) - "no cell drawn twice".
 extern uint8_t *g_render_ext_cell_count;
 // Test hook: where the last render_view_ext drew Thing `idx` (after interpolation and the sleeping-segment
 // layout, see thing_pos in render_ext.cpp). False when the slot was not laid out as a segment last frame.

@@ -34,7 +34,9 @@ void level_build_canyon(int x0, int y0, int x1, int y1);    // 0x346b0
 void level_build_ridge(int x0, int y0, int x1, int y1);     // 0x34760
 
 // Helpers 0x34250..0x34bb0.
-int  math_wrap_diff(int a, int b, int modulus);                               // math_wrap_diff_34250: b - a wrapped
+// Cell-coordinate arguments of the helpers and builders wrap on the world torus (world.h); cells are
+// world_cell indices.
+int  math_wrap_diff(int a, int b, int modulus);                               // math_wrap_diff_34250: b - a wrapped (16-bit; modulus = g_world.size for cells)
 void terrain_set_pos_scratch(int x0, int y0, int x1, int y1);                 // terrain_set_pos_scratch_34280
 int  terrain_rect_height_range(int x, int y, int dy, int dx);                 // terrain_rect_height_range_34820
 void terrain_smooth_castle_border(int cx, int cy, int half_h, int half_w, int size);   // terrain_smooth_castle_border_348b0

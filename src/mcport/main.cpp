@@ -77,6 +77,7 @@
 #include "screenshot.h"
 #include "tick_profile.h"
 #include "debug_camera.h"
+#include "world.h"
 #include "debug_cmd.h"
 #include "console.h"
 #include "debug_overlay.h"
@@ -314,8 +315,8 @@ static void free_camera_step(Camera &cam, const mc::Input &in) {
     // yaw 0 looks towards -y, 0x200 towards +x (render.h); sin/cos are 16.16
     int dx = (int)(((int64_t)mc_sin(cam.yaw) * fwd + (int64_t)mc_cos(cam.yaw) * side) * speed >> 16);
     int dy = (int)(((int64_t)-mc_cos(cam.yaw) * fwd + (int64_t)mc_sin(cam.yaw) * side) * speed >> 16);
-    cam.cam_x = (cam.cam_x + dx) & 0xffff;
-    cam.cam_y = (cam.cam_y + dy) & 0xffff;
+    cam.cam_x = world_wrap(cam.cam_x + dx);       // round 11: wraps at g_world.units (0xffff at 256 cells)
+    cam.cam_y = world_wrap(cam.cam_y + dy);
     if (in.keys[SDL_SCANCODE_Q]) cam.yaw = (cam.yaw - 8) & MC_ANGLE_MASK;
     if (in.keys[SDL_SCANCODE_E]) cam.yaw = (cam.yaw + 8) & MC_ANGLE_MASK;
     if (in.keys[SDL_SCANCODE_R]) cam.cam_z += speed;
@@ -326,7 +327,7 @@ static void free_camera_step(Camera &cam, const mc::Input &in) {
     if (in.keys[SDL_SCANCODE_X]) cam.roll = (cam.roll + 4) & MC_ANGLE_MASK;
     if (in.keys[SDL_SCANCODE_EQUALS]) cam.zoom += 2;
     if (in.keys[SDL_SCANCODE_MINUS] && cam.zoom > 0x40) cam.zoom -= 2;
-    int ground = g_map_height[mc_cell_of((uint16_t)cam.cam_x, (uint16_t)cam.cam_y)] * 0x20;
+    int ground = g_map_height[world_cell_of(cam.cam_x, cam.cam_y)] * 0x20;
     if (cam.cam_z < ground + 0x80) cam.cam_z = ground + 0x80;
 }
 
@@ -392,7 +393,11 @@ static bool s_dcam_on = false;
 static Camera s_dcam{}, s_dcam_prev{};
 static int s_dcam_follow = -1;                // followed Thing slot, -1 = none
 static uint32_t s_dcam_follow_gen = 0;        // its thing_slot_generation when the follow started
-static void dcam_set(const Camera &c) { s_dcam = s_dcam_prev = c; s_dcam.cam_x &= 0xffff; s_dcam.cam_y &= 0xffff; s_dcam_prev = s_dcam; }
+static void dcam_set(const Camera &c) {
+    s_dcam = s_dcam_prev = c;
+    s_dcam.cam_x = world_wrap(s_dcam.cam_x); s_dcam.cam_y = world_wrap(s_dcam.cam_y);   // round 11: g_world.units
+    s_dcam_prev = s_dcam;
+}
 // One free-camera step in follow mode: 3 cells behind the Thing along the camera's yaw, 2 cells above it.
 static void dcam_follow_step() {
     if (s_dcam_follow < 0) return;
@@ -403,10 +408,10 @@ static void dcam_follow_step() {
         return;
     }
     const Thing *t = thing_at((unsigned)s_dcam_follow);
-    s_dcam.cam_x = (t->x - (int)((int64_t)mc_sin(s_dcam.yaw) * 0x300 >> 16)) & 0xffff;
-    s_dcam.cam_y = (t->y + (int)((int64_t)mc_cos(s_dcam.yaw) * 0x300 >> 16)) & 0xffff;
+    s_dcam.cam_x = world_wrap(t->x - (int)((int64_t)mc_sin(s_dcam.yaw) * 0x300 >> 16));
+    s_dcam.cam_y = world_wrap(t->y + (int)((int64_t)mc_cos(s_dcam.yaw) * 0x300 >> 16));
     s_dcam.cam_z = t->z + 0x200;
-    const int ground = g_map_height[mc_cell_of((uint16_t)s_dcam.cam_x, (uint16_t)s_dcam.cam_y)] * 0x20;
+    const int ground = g_map_height[world_cell_of(s_dcam.cam_x, s_dcam.cam_y)] * 0x20;
     if (s_dcam.cam_z < ground + 0x80) s_dcam.cam_z = ground + 0x80;
 }
 
@@ -636,11 +641,12 @@ static void dcam_follow(int slot) {
 static void dcam_to_cell(int cx, int cy) {
     if (!s_dcam_on) dcam_enable(true);
     s_dcam_follow = -1;
-    s_dcam.cam_x = ((cx & 0xff) << 8) | 0x80;
-    s_dcam.cam_y = ((cy & 0xff) << 8) | 0x80;
-    s_dcam.cam_z = g_map_height[mc_cell_of((uint16_t)s_dcam.cam_x, (uint16_t)s_dcam.cam_y)] * 0x20 + 0x400;
+    cx = world_wrap_cell(cx); cy = world_wrap_cell(cy);  // round 11: cells wrap at g_world.size
+    s_dcam.cam_x = (cx << 8) | 0x80;
+    s_dcam.cam_y = (cy << 8) | 0x80;
+    s_dcam.cam_z = g_map_height[world_cell_of(s_dcam.cam_x, s_dcam.cam_y)] * 0x20 + 0x400;
     s_dcam_prev = s_dcam;
-    mclog(MCLOG_INFO, "camera: cell %d,%d (%d,%d z %d)", cx & 0xff, cy & 0xff, s_dcam.cam_x, s_dcam.cam_y, s_dcam.cam_z);
+    mclog(MCLOG_INFO, "camera: cell %d,%d (%d,%d z %d)", cx, cy, s_dcam.cam_x, s_dcam.cam_y, s_dcam.cam_z);
 }
 
 // Shift+Delete: the local wizard to the free camera's position (task B's teleport packet, debug_cmd.h:
@@ -648,11 +654,13 @@ static void dcam_to_cell(int cx, int cy) {
 static void teleport_to_camera() {
     if (!s_dcam_on) { mclog(MCLOG_WARN, "teleport: the free camera is off (Delete turns it on)"); return; }
     std::string why;
-    if (!debug_cmd_queue(debug_cmd_teleport(s_dcam.cam_x & 0xffff, s_dcam.cam_y & 0xffff, s_dcam.cam_z), &why))
+    // round 11: the camera is wrapped at g_world.units (0..0xffff in the 256 world); what of a wider position
+    // the teleport packet carries is debug_cmd's business (debug_cmd.h)
+    if (!debug_cmd_queue(debug_cmd_teleport(s_dcam.cam_x, s_dcam.cam_y, s_dcam.cam_z), &why))
         mclog(MCLOG_WARN, "teleport: %s", why.c_str());
     else
-        mclog(MCLOG_INFO, "teleport: wizard to %d,%d z %d (cell %d,%d)", s_dcam.cam_x & 0xffff, s_dcam.cam_y & 0xffff, s_dcam.cam_z,
-              (s_dcam.cam_x >> 8) & 0xff, (s_dcam.cam_y >> 8) & 0xff);
+        mclog(MCLOG_INFO, "teleport: wizard to %d,%d z %d (cell %d,%d)", s_dcam.cam_x, s_dcam.cam_y, s_dcam.cam_z,
+              world_cx(s_dcam.cam_x), world_cx(s_dcam.cam_y));
 }
 
 int main(int argc, char **argv) {
