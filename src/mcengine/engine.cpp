@@ -144,8 +144,16 @@ void world_art_apply(bool on) {
     if (!on || world_set() != 0 || !world_set_hidden_available() || !g_texture_atlas) return;
     uint8_t pal1[768];
     if (mc_load_rnc_into(hidden_path("data/pal1-0.dat").c_str(), pal1, sizeof pal1) != (long)sizeof pal1) return;
+    // The level's palette is data/palette.dat (the base set's), read here: g_palette6 holds whatever was shown last at
+    // the level start - the front end's palette when the match starts from the menu (round 12: orange oaks, pink snow)
+    uint8_t pal0[768];
+    {
+        char path[1024];
+        mc_path_join(path, sizeof path, sim_game_dir(), "data/palette.dat");
+        if (mc_load_rnc_into(path, pal0, sizeof pal0) != (long)sizeof pal0) return;
+    }
     uint8_t remap[256];
-    palette_remap(pal1, g_palette6, remap);
+    palette_remap(pal1, pal0, remap);
     const int B = (int8_t)g_state->texture_block_size;
     if (B != 16 && B != 32) return;
     mc_blob blk;
@@ -174,7 +182,7 @@ void world_art_apply(bool on) {
     std::memcpy(s_art.avg, g_tex_avg_colour(), sizeof s_art.avg);
     g_texture_atlas = patched;
     fill_texture_table(patched, B);
-    texture_average_colours(g_palette6, g_tex_avg_colour());
+    texture_average_colours(pal0, g_tex_avg_colour());
     if (load_hw_sprite(140, MC_SPRITE_OAK, remap)) g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite = MC_SPRITE_OAK;
     if (load_hw_sprite(299, MC_SPRITE_OAK_BURNT, remap))
         g_sprite_desc[MC_SPRITE_DESC_OAK_BURNT].base_sprite = MC_SPRITE_OAK_BURNT;

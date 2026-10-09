@@ -42,6 +42,8 @@
 #include "ui_draw.h"
 #include "net.h"
 #include "world.h"
+#include "world_set.h"
+#include "tables.h"
 #include "debug_overlay.h"
 #include "mcfile.h"
 #include "crash_handler.h"
@@ -512,6 +514,31 @@ int main(int argc, char **argv) {
         mode_stop_run();
         g_settings = defaults;
         world_set_size(256);
+    }
+
+    // 9. the generated world's Hidden Worlds art (snow tiles, oak) is remapped into data/palette.dat, whatever
+    //    g_palette6 holds at the level start (round 12 bug: a match started from the menu, where g_palette6 is still the
+    //    front end's palette, drew orange oaks and pink snow)
+    if (world_set_hidden_available() && world_set() == 0) {
+        const int B = (int8_t)g_state->texture_block_size;
+        const size_t n = (size_t)B * B * 256;
+        world_art_apply(true);
+        const bool on = world_art_active();
+        CHECK(on, "world art did not switch on with Hidden Worlds installed");
+        std::vector<uint8_t> atlas_a(g_texture_atlas, g_texture_atlas + n), avg_a(g_tex_avg_colour(), g_tex_avg_colour() + 0x180);
+        uint8_t keep[768];
+        std::memcpy(keep, g_palette6, sizeof keep);
+        for (int i = 0; i < 768; i++) g_palette6[i] = (uint8_t)((i % 3) == 1 ? 0 : 0x3f);   // magenta: a "menu" palette
+        world_art_apply(true);
+        const bool same_atlas = std::memcmp(atlas_a.data(), g_texture_atlas, n) == 0;
+        const bool same_avg = std::memcmp(avg_a.data(), g_tex_avg_colour(), 0x180) == 0;
+        std::memcpy(g_palette6, keep, sizeof keep);
+        world_art_apply(false);
+        std::printf("world art: remap independent of the shown palette: atlas %s, average colours %s\n",
+                    same_atlas ? "identical" : "DIFFERENT", same_avg ? "identical" : "DIFFERENT");
+        CHECK(on && same_atlas && same_avg, "world art depends on g_palette6 at the level start");
+    } else {
+        std::printf("world art: Hidden Worlds not installed, part 9 skipped\n");
     }
     std::printf("%s\n", g_fail ? "FAILED" : "PASS");
     return g_fail ? 1 : 0;
