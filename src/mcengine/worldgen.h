@@ -89,6 +89,22 @@ const WorldLayout &worldgen_last_layout();
 // palm's, so the simulation does not depend on whether Hidden Worlds is installed). Returns the trees changed.
 int worldgen_apply_woods();
 
+// ---- round 12 (task A): the setup screen's minimap preview ----------------------------------------------------
+// The height field, sea, spawn plateaus and rivers worldgen_build would make for `params` on the template `tmpl`
+// (only its GenMap.off is read: the seeded lattice point), without building a level: everything runs on a private
+// N x N scratch world - g_world, g_world_unit_mask and the five map pointers are switched to it and restored
+// before returning, so no map, RNG (g_rng16 / g_state->rng / ModeRng / the AI's), Thing or GameState byte changes.
+// The class / texture / light passes and the features after the rivers are not run (the preview's heights are the
+// ones before terrain_build_passes; the seats are the same cells as worldgen_build's WFEAT_SPAWN features).
+struct WorldPreview {
+    int size = 0;                       // cells per side (N)
+    int symmetry = WORLD_SYM_NONE;      // the resolved group
+    int players = 1;                    // seats 0 .. players-1 get a start record
+    std::vector<uint8_t> height;        // N * N, row-major (y * N + x); 0 = water (sea and rivers), land >= 1
+    std::vector<WorldFeature> seats;    // WFEAT_SPAWN, grade = seat index (as worldgen_build's layout)
+};
+bool worldgen_preview(const ModeParams &params, const LevelData &tmpl, WorldPreview *out);
+
 // sim.cpp: the level start asks this before terrain_build; true = the world was built (terrain_build skipped).
 extern bool (*g_hook_level_world)();
 // sim.cpp: every level start tells the renderer side whether a generated world is on (engine.h world_art_apply;

@@ -11,6 +11,7 @@
 #include "world_set.h"
 #include "world.h"
 #include "mode.h"
+#include "mode_rules.h"
 #include "tick_profile.h"
 #include <cstdio>
 #include <cstring>
@@ -414,7 +415,7 @@ void player_spawn(PlayerRec *rec, Thing *t) {
     // Every other wizard starts to consider this player a threat.
     for (uint32_t i = g_cfg->player_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
         Thing *o = thing_at(i);
-        if (o->owner != t->owner && (o->type == 0 || o->type == 1))
+        if (!same_side(o->owner, t->owner) && (o->type == 0 || o->type == 1))   // round 12: allies are no threat
             *player_threat(player_block(o), P->player_no) = 0x9fdf;
     }
     P->tether_target = 0;
@@ -834,6 +835,8 @@ void player_dying_update(Thing *t) {
             Thing *b = thing_at(i);
             if (b->type == 0x27 && b->mana_owner == thing_index(t)) b->mana_owner = thing_index(ball);
         }
+        // port (round 12): the match rules count the death and start the respawn timer (mode_rules.cpp)
+        if (mode_active() && g_hook_mode_wizard_died) g_hook_mode_wizard_died(t);
     }
     t->flags |= 0x20;
     g_state->active_top--;
@@ -852,6 +855,14 @@ void player_look_at_killer(Thing *t) {
     P->yaw_rate = 0;
 }
 
+// Port (round 12): may the dead wizard of record p respawn in a mode run? It lies dead (state 3), has a castle,
+// is not eliminated and its respawn timer (ModePlayer.respawn_ticks, counted down by mode_rules_tick) ran out.
+static bool mode_respawn_ready(int p, const Thing *t) {
+    const ModePlayer &m = g_mode.players[p & 7];
+    return t->state == 3 && g_state->players[p & 7].blk.castle != 0 && !(m.flags & MODE_PLAYER_ELIMINATED) &&
+           m.respawn_ticks <= 0;
+}
+
 // player_type3_s3_update_40ab0 (state 3: dead). An AI wizard respawns at its castle after
 // Thing.aux ticks (or leaves the game without one); a human watches the killer until command 0xf.
 void player_type3_s3_update(Thing *t) {
@@ -860,6 +871,12 @@ void player_type3_s3_update(Thing *t) {
     PlayerRec *rec = &g_state->players[P->player_no & 7];
     if (rec->is_computer == 1) {
         if (g_cfg->flags & 0x200) return;
+        if (mode_active()) {
+            // port (round 12): the match rules' respawn at the castle; without a castle the bot is eliminated by
+            // mode_rules_tick and stays dead (a spectator) instead of leaving the game
+            if (mode_respawn_ready(P->player_no, t)) player_spawn(rec, t);
+            return;
+        }
         if (P->castle != 0) {
             if (t->aux == 0) player_spawn(rec, t);
             else             t->aux--;
@@ -911,6 +928,7 @@ Camera player_camera(int player) {
 // game_check_level_won_3db20
 void game_check_level_won() {
     if (g_cfg->flags & 0x110) return;                   // not in network games and movies
+    if (mode_active()) return;                          // port (round 12): a mode run ends by its match rules
     for (int p = 0; p < (int)(uint16_t)g_state->player_count && p < 8; p++) {
         PlayerRec *rec = &g_state->players[p];
         if (rec->active == 0) continue;
@@ -1084,6 +1102,12 @@ void player_commands_process() {
             stop_recording = true;
             break;
         case 0xf:   // respawn request of a dead player; without a castle the level is lost
+            if (mode_active()) {
+                // port (round 12): in a mode run only after the respawn timer, at the castle; without a castle the
+                // player is eliminated by the match rules (no "level lost", no "leaves the game")
+                if (!mode_respawn_ready(p, t)) break;
+                goto spawn;
+            }
             if (P->castle == 0) {
                 if (g_cfg->flags & 0x10) goto leave_game;
                 rec->status |= 0xc;

@@ -18,6 +18,7 @@
 #include "player.h"
 #include "input.h"
 #include "text.h"
+#include "mode.h"
 #include "gen/hud_tables.h"
 #include <cstdio>
 #include <cstring>
@@ -740,6 +741,117 @@ static void map_screen(const FrameBuffer &fb, int local, const Camera &cam) {
     if (g_mouse_y >= 0x17e) ui_draw_player_list();
 }
 
+// ---------------------------------------------------------------------------------------------
+// Port (round 12): the Conquest match HUD over the flight view - match timer, respawn countdown, "eliminated",
+// desecration progress (of the local wizard's castle / by the local wizard), the victory / defeat banner while the
+// match is over before the level ends. Draw only (reads g_mode and the local player's Things, writes nothing);
+// nothing at all when no mode is active, so every HUD reference stays identical.
+// The numbers come from the ModeState / ModePlayer fields as mode.h defines them (respawn_ticks, desecrate_rec1 /
+// desecrate_ticks, match tick and limits), the same values mode_rules.h's queries report.
+// ---------------------------------------------------------------------------------------------
+static int mode_desecrate_total_ticks() {
+    const uint8_t s = g_mode.params.match.desecrate_s;
+    return (s == 0xff ? 0 : (s ? s : 25)) * MODE_TICKS_PER_SECOND;
+}
+
+void hud_draw_mode(int local) {
+    if (!mode_active() || !g_ui_fb.pixels) return;
+    local &= 7;
+    const ModeState &m = g_mode;
+    const ModePlayer &me = m.players[local];
+    ui_set_font(1);
+    const int lh = ui_font_line_height();
+    const int vh = lo1() ? 400 : 480;
+    const bool over = m.match_state == MATCH_OVER;
+    char buf[96];
+    // font 1 = the HUD's message font; the banner (and in the 640 modes, where font 1 is 7 pixels high, the death
+    // lines) at twice its size (font 0 is no text font: its glyphs are not in ASCII order)
+    auto centred = [&](const char *s, int y, uint8_t colour, int scale = 1) {
+        ui_set_font(1);
+        const int w = ui_text_width(s) * scale, h = ui_font_line_height() * scale;
+        const int x = (0x280 - w) / 2;
+        ui_shade_rect(x - 8, y - 3, w + 16, h + 6, 0x34);
+        if (scale == 1) { ui_draw_text(s, x, y, colour); return h; }
+        // the text into a scratch buffer at its own size, then every pixel as a scale x scale block
+        const FrameBuffer target = g_ui_fb;
+        const int div = ui_lo_res() ? 2 : 1;            // virtual 640-space -> pixels of the frame
+        const int tw = ui_text_width(s) / div + 2, th = ui_font_line_height() / div + 2;
+        std::vector<uint8_t> tmp((size_t)tw * th, 0);
+        const uint8_t key = colour == 0 ? 1 : 0;        // the "empty" value of the scratch buffer
+        if (key) std::fill(tmp.begin(), tmp.end(), key);
+        ui_set_target(FrameBuffer{tmp.data(), tw, th});
+        ui_draw_text(s, 0, 0, colour);
+        ui_set_target(target);
+        const int px0 = x / div, py0 = y / div;
+        for (int r = 0; r < th; r++)
+            for (int c = 0; c < tw; c++) {
+                if (tmp[(size_t)r * tw + c] == key) continue;
+                for (int dy = 0; dy < scale; dy++)
+                    for (int dx = 0; dx < scale; dx++) {
+                        const int X = px0 + c * scale + dx, Y = py0 + r * scale + dy;
+                        if (X >= 0 && Y >= 0 && X < target.width && Y < target.height) target.pixels[Y * target.width + X] = colour;
+                    }
+            }
+        return h;
+    };
+    const int big = lo1() ? 1 : 2;
+    // match timer (top right, under the hand panels)
+    if (m.params.match.time_limit_min && !over) {
+        const int64_t limit = (int64_t)m.params.match.time_limit_min * 60 * MODE_TICKS_PER_SECOND;
+        int64_t left = limit - (int64_t)m.tick;
+        if (left < 0) left = 0;
+        const int secs = (int)((left + MODE_TICKS_PER_SECOND - 1) / MODE_TICKS_PER_SECOND);
+        std::snprintf(buf, sizeof buf, "%d:%02d", secs / 60, secs % 60);
+        const int w = ui_text_width(buf);
+        ui_shade_rect(0x27c - w - 6, 0x2e, w + 8, lh + 4, 0x34);
+        ui_draw_text(buf, 0x27c - w - 2, 0x30, secs <= 60 ? blink_red() : ui_col_white());
+    }
+    int y = vh * 2 / 5;
+    if (over) {
+        // the banner while the level runs out (mode_rules ends the level a few seconds later)
+        const bool won = m.end_reason != MATCH_END_NONE && me.side == m.winner_side && (me.flags & MODE_PLAYER_IN_MATCH);
+        y += centred(won ? "VICTORY" : "DEFEAT", y, won ? ui_colour(15, 13, 4) : ui_col_red(), 2) + 10;
+        const char *why = m.end_reason == MATCH_END_ELIMINATION ? "the last side standing"
+                        : m.end_reason == MATCH_END_MANA ? "mana dominance"
+                        : m.end_reason == MATCH_END_TIMER ? "time is up: the most castle mana" : "the match is over";
+        centred(why, y, ui_col_white());
+        return;
+    }
+    if (me.flags & MODE_PLAYER_ELIMINATED) {
+        y += centred("ELIMINATED - SPECTATING", y, ui_col_red(), big) + 10;
+    } else {
+        const Thing *T = thing_at(thing_wrap(g_state->players[local].thing));
+        const bool dead = T->health < 0 || me.respawn_ticks > 0;
+        if (dead) {
+            if (me.respawn_ticks > 0) {
+                const int secs = (me.respawn_ticks + MODE_TICKS_PER_SECOND - 1) / MODE_TICKS_PER_SECOND;
+                std::snprintf(buf, sizeof buf, "RISING AGAIN AT YOUR CASTLE IN %d", secs);
+                y += centred(buf, y, ui_col_white(), big) + 10;
+            } else {
+                y += centred("PRESS SPACE TO RISE AGAIN", y, blink_white(), big) + 10;
+            }
+        }
+    }
+    // desecration: the local wizard's castle (every enemy channelling on it: the highest progress) and its own channel
+    const int total = mode_desecrate_total_ticks();
+    if (total > 0) {
+        int theirs = 0;
+        for (int p = 0; p < 8; p++)
+            if (p != local && m.players[p].desecrate_rec1 == local + 1) theirs = std::max(theirs, (int)m.players[p].desecrate_ticks);
+        auto bar = [&](const char *label, int ticks, uint8_t colour) {
+            const int pct = std::clamp(ticks * 100 / total, 0, 100);
+            std::snprintf(buf, sizeof buf, "%s %d%%", label, pct);
+            centred(buf, y, colour);
+            const int bw = 160, bx = (0x280 - bw) / 2, by = y + lh + 4;
+            gfx_fill_rect(bx - 1, by - 1, bw + 2, 6, ui_col_black());
+            if (pct * bw / 100 > 0) gfx_fill_rect(bx, by, pct * bw / 100, 4, colour);
+            y += lh + 18;
+        };
+        if (theirs > 0) bar("YOUR CASTLE IS BEING DESECRATED", theirs, tick_bit(2) ? ui_col_red() : ui_colour(15, 6, 2));
+        if ((me.flags & MODE_PLAYER_DESECRATING) && me.desecrate_rec1 > 0) bar("DESECRATING", me.desecrate_ticks, ui_colour(15, 13, 4));
+    }
+}
+
 static void frame_pass(const FrameBuffer &fb, int player);
 
 // Port-only (render references): draw the flight HUD during movie playback as well - what
@@ -845,6 +957,8 @@ static void frame_pass(const FrameBuffer &fb, int player) {
             break;
         default: break;
         }
+        // port (round 12): the Conquest match HUD in flight (also while the local wizard is dead)
+        if ((mode == 0 || mode == 3) && s_drawing && mode_active()) hud_draw_mode(local);
     }
     // tail: recording indicator and the credits roll of the attract movie
     ui_set_font(1);

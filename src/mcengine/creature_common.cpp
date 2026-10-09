@@ -7,6 +7,7 @@
 #include "creatures.h"
 #include "mc_math.h"
 #include "mode.h"
+#include "mode_rules.h"
 #include <cstdint>
 
 namespace {
@@ -355,7 +356,7 @@ void creature_follow_leader(Thing *t, int base) {
         // separation: turn away from the first creature of the type with another owner within 0x100
         for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if (o->owner == t->owner) continue;
+            if (same_side(o->owner, t->owner)) continue;            // round 12: allied units flock like own ones
             // (operands sign-extended before the subtraction, no wrap: the original's quirk - the test misses
             // across x = 0x8000. Round 11 session 3: a wider world takes the torus difference instead, so no
             // invisible line runs through the middle of a Conquest world)
@@ -398,6 +399,7 @@ void creature_die(Thing *t, int base) {
         uint8_t ty = t->type;
         if (ty != 0xc && ty != 0xd && ty != 0xe && ty != 0xf && ty != 9) owner_block(killer)->kills++;
     }
+    if (mode_active() && g_hook_mode_creature_died) g_hook_mode_creature_died(t);   // port (round 12): match stats
     thing_set_state(t, dead_state);
 }
 

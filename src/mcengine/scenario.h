@@ -103,7 +103,11 @@ std::string cmd_thing_name(int cls, int type);           // "Creature Dragon (5,
 //   # comment                         header lines (anywhere):
 //   level L                           campaign level L (0-based) from its first tick
 //   rts seed S [bots B] [size N] [map M] [humans H] [reseed]
-//                                     a Conquest mode run (debug commands always on)
+//       [teams T] [win W] [mana-pct P] [hold S] [time M] [respawn S] [respawn-level S] [desecrate S|off]
+//       [bot-skill K] [result]
+//                                     a Conquest mode run (debug commands always on); the match rules as mcport's
+//                                     `rts --teams ...` (rts_run.h, mode_level.h mode_match_option); `result`: mcport
+//                                     shows the result screen when the level ends instead of quitting
 //   stop T                            end after tick T (default: when the last line ran)
 //   name TEXT                         shown in reports
 //   T <command>                       the command in tick T (simulation commands are queued before tick T,
@@ -127,7 +131,8 @@ struct Scenario {
     int  level = -1;             // `level L`
     bool rts = false;            // `rts ...`
     ModeParams rts_params;
-    int  stop = 0;               // 0 = when the items are done
+    bool rts_result = false;     // `rts ... result` (round 12)
+    int  stop = 0;              // 0 = when the items are done
     std::vector<ScenarioItem> items;     // sorted by (tick, order); no INPUT items
     std::vector<ScenarioItem> inputs;    // the input verbs (ranges)
     std::string error;           // parse error ("name:line: ...")

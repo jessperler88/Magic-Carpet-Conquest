@@ -18,7 +18,8 @@
 //  4. The lobby screen (frontend.cpp) joining a session of two through the in-memory transport as player
 //     1 (the other player is there first and answers slowly): the frame-stepped join, the slot
 //     animations (slot 0 blinks while the call is pending), the level exchange (player 0's choice wins),
-//     FE_START_LEVEL; PPMs of the lobby while joining and when both slots are connected (next to the
+//     FE_START_LEVEL (round 12: the host's rules carry a Conquest proposal - net_rules_applied hands it to mcport,
+//     mode_net_session_params makes 2 humans + 3 bots of it); PPMs of the lobby while joining and when both slots are connected (next to the
 //     executable: net_lobby_joining_a/b.ppm, net_lobby_joined.ppm).
 //  5. The config screen's sound summary with a sndsetup.inf / .dat pair in the save directory: the card
 //     names and the I/O / IRQ / DMA / music port lines (texts 23..26); net_config_*.ppm.
@@ -34,6 +35,7 @@
 #include "input.h"
 #include "thing.h"
 #include "settings.h"
+#include "mode_level.h"
 #include "mc_globals.h"
 #include "crash_handler.h"
 #include <algorithm>
@@ -749,6 +751,9 @@ static void part4_lobby() {
             other_level = (int8_t)cmds[other_local * 10 + 1];
             NetGameRules r{};                                // the host's rules: everybody adopts them
             r.thing_slots = 4000; r.possession_range_pct = 140;
+            r.mode = GAME_MODE_CONQUEST;                     // round 12: the host's urn (the lobby's mode proposal)
+            r.mode_params.seed = 11; r.mode_params.world_size = 1024; r.mode_params.bots = 3;
+            r.mode_params.match.time_limit_min = 2;
             other_rules = net_agree_rules(r, nullptr);
         }
         net_context_select(nullptr);
@@ -785,6 +790,16 @@ static void part4_lobby() {
     CHECK_EQ(other_rules.thing_slots, 4000u);              // the lobby (1000 / 100 here) took the host's rules
     CHECK_EQ(thing_pool_wanted_slots(), 4000);
     CHECK_EQ(gameplay_rules().possession_range_pct, 140);
+    {   // round 12: mcport reads the agreed mode here (rts_begin RTS_START_LOBBY) and starts that run instead
+        NetGameRules applied{};
+        CHECK(net_rules_applied(&applied));
+        CHECK(applied.mode == GAME_MODE_CONQUEST && applied.mode_params.seed == 11 && applied.mode_params.world_size == 1024);
+        CHECK_EQ(applied.mode_params.match.time_limit_min, 2);
+        CHECK_EQ(gameplay_rules().mode, GAME_MODE_CONQUEST);
+        CHECK(!mode_active());                             // nothing runs before mcport starts the run
+        const ModeParams sp = mode_net_session_params(applied.mode_params, net_player_count());
+        CHECK(sp.humans == 2 && sp.bots == 3);
+    }
     std::printf("  joined after %d frames: local %d, other %d, level %d\n", frames, g_state->local_player, other_local, g_level_out);
     // the exit fade, then the front end has left
     for (int i = 0; i < 60; i++) frame();
@@ -794,6 +809,7 @@ static void part4_lobby() {
     net_shutdown();
     CHECK_EQ(thing_pool_wanted_slots(), 1000);             // released with the session
     CHECK_EQ(gameplay_rules().possession_range_pct, 100);
+    CHECK(!net_rules_applied(nullptr) && gameplay_rules().mode == 0);
     net_context_select(prev);
     net_context_destroy(ctx);
     g_fe_network = 0;

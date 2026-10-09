@@ -13,3 +13,6 @@ void mode_bots_level_start();
 // The skill a MatchRules.bot_skill value plays at (0 -> 2 normal; 1 easy .. 4 hard) and its name.
 int  mode_bot_skill(uint8_t bot_skill);
 const char *mode_bot_skill_name(int skill);     // "easy", "normal", "hard", "brutal"
+// The skill applied to one level player block (0xd8 bytes: +4 aggression, +8 reaction, +0xc accuracy, int16 each,
+// 0..255). Skill 2 changes nothing; 1 lowers every knob, 3 / 4 raise them toward 255 (mode_bots.cpp).
+void mode_bots_apply_skill(uint8_t *blk, int skill);

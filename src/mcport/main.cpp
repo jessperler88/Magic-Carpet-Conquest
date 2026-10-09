@@ -74,6 +74,8 @@
 #include "rts_run.h"
 #include "replay_run.h"
 #include "mode_level.h"
+#include "fe_mode.h"
+#include "mode_flow.h"
 #include "mclog.h"
 #include "timectl.h"
 #include "screenshot.h"
@@ -90,6 +92,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -521,6 +524,65 @@ static void menu_close() {
     for (const auto &kv : changed) mclog(MCLOG_INFO, "menu: %s = %s", kv.first.c_str(), kv.second.c_str());
 }
 
+// ---- round 12 (task D): the Conquest flow - setup screen / lobby -> match -> result screen ---------------------------
+// A mode run (s_rts) started from the setup screen (FE_START_MODE), the lobby (FE_START_LEVEL with an agreed mode), a
+// loaded mode state or `rts --result` ends on the result screen (FE_STATE_MODE_RESULT, then the main menu / the lobby);
+// the command line's `rts` without --result quits mcport when its level ends, as before. The campaign's progress
+// (Config.level, the .gam's spells and options) is kept aside for the length of the run (mode_level.h).
+enum ModeEnd { MODE_END_QUIT, MODE_END_RESULT };
+static ModeEnd s_mode_end = MODE_END_QUIT;
+static bool s_mode_forfeit = false;           // the pause menu's "Forfeit the match" was chosen in a network run
+
+// A fresh match seed for a setup that asks for a random one (seed 0): the platform's clock and counter, never 0.
+static uint32_t fresh_match_seed() {
+    uint64_t x = SDL_GetPerformanceCounter() ^ ((uint64_t)std::time(nullptr) << 20);
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdull; x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ull; x ^= x >> 33;
+    const uint32_t s = (uint32_t)x & 0x7fffffffu;
+    return s ? s : 1;
+}
+
+// The mode run's level ended (or was forfeited): the result for the front end, the run stopped, the campaign back,
+// the result screen next. `forfeit`: the local player left the match (mode_result_snapshot).
+// (mode_flow.h has the engine half: the same sequence mode_flow_test runs headless.)
+static void log_mode_result(bool forfeit) {
+    mclog(MCLOG_INFO, "rts: match %s after %u ticks (end reason %u, winning side %u)%s",
+          g_mode.match_state == MATCH_OVER ? "over" : "not decided", (unsigned)g_mode.tick, (unsigned)g_mode.end_reason,
+          (unsigned)g_mode.winner_side, forfeit ? ", forfeited" : "");
+}
+// `leave_level`: the offline forfeit - the level is left at once (mode_flow_forfeit), else it ended already.
+static void finish_mode_run(bool forfeit, bool leave_level) {
+    forfeit = forfeit || s_mode_forfeit;
+    log_mode_result(forfeit);
+    rts_dump_final();                           // --dump-final / MC_DUMP_FINAL, while the run is still there
+    if (leave_level) mode_flow_forfeit();       // ... mode_flow_finish(true)
+    else mode_flow_finish(forfeit);             // the result for the front end, the run stopped, the result screen next
+    s_rts = false;
+    s_mode_forfeit = false;
+    s_mode_end = MODE_END_QUIT;
+}
+
+// The setup screen's Start (FE_START_MODE): an offline run with fe_mode_params().
+static bool start_menu_mode_run(int *level) {
+    const ModeParams mp = mode_flow_menu_params(fe_mode_params(), fresh_match_seed());
+    *level = mode_flow_enter();
+    if (!rts_begin(s_game.c_str(), mp, RTS_START_OFFLINE)) { mode_flow_abort(); return false; }
+    fe_mode_set_params(mp);                     // the setup screen shows the seed that was played next time
+    s_rts = true;
+    s_mode_end = MODE_END_RESULT;
+    s_mode_forfeit = false;
+    return true;
+}
+
+// The lobby left with FE_START_LEVEL and the session agreed on a mode (the host's urn): that run instead of the level.
+static bool start_lobby_mode_run(int *level) {
+    *level = mode_flow_enter();                 // Config.level = the lobby's level choice, shown again afterwards
+    if (!rts_begin(s_game.c_str(), ModeParams{}, RTS_START_LOBBY)) { mode_flow_abort(); return false; }
+    s_rts = true;
+    s_mode_end = MODE_END_RESULT;
+    s_mode_forfeit = false;
+    return true;
+}
+
 // The level a save slot belongs to (-1: empty / invalid), and its 640x480 flag.
 static int state_slot_level(int slot, bool *hires) {
     char path[1024];
@@ -540,15 +602,20 @@ static bool load_state_slot(int slot, bool in_level, int *level) {
     bool force_begin = false;
     if (lv == MODE_LEVEL_INDEX) {                               // task A: a game-mode state (rts): start its run first
         char path[1024];
+        if (!s_rts) mode_campaign_save();                       // round 12: the campaign is kept aside for the run
         if (!savestate_slot_path(slot, path, sizeof path) || !mode_start_run_for_state(s_game.c_str(), path)) {
+            if (!s_rts) mode_campaign_restore();
             notice("slot %d: the game mode of this state cannot be started", slot);
             return false;
         }
+        if (!s_rts) s_mode_end = MODE_END_RESULT;               // round 12: a loaded match ends on the result screen
         s_rts = true;
         force_begin = true;                                     // the mode run's parameters changed: begin its level again
     } else if (s_rts) {                                         // a campaign state ends the mode run
         rts_end();
         s_rts = false;
+        s_mode_end = MODE_END_QUIT;
+        mode_campaign_restore();                                // (the state's own Config / spells replace it next)
     }
     const bool started = !in_level || lv != *level || force_begin;
     if (!in_level) {
@@ -692,7 +759,7 @@ int main(int argc, char **argv) {
         if (!replay_run_parse(&argc, argv, &replay, &err)) { mclog(MCLOG_ERROR, "mcport: %s", err.c_str()); return 1; }
     }
     if (!config_load(s_save_dir.c_str(), &argc, argv, &g_settings, &s_opts)) {
-        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--size 256..4096] [--map 50..69] [--reseed] [--tiled | --generate] [--symmetry auto|none|point|mirror|rot4|dihedral] [--water %] [--rough %] [--continent %] [--springs N] [--wild %] [--lairs N] [--triggers N] [--portals N] [--no-debug] [--net N] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
+        mclog(MCLOG_ERROR, "usage: mcport [game dir] [play N | load SLOT | demo N | network | LEVEL | rts [--seed S] [--bots B] [--size 256..4096] [--map 50..69] [--reseed] [--tiled | --generate] [--symmetry auto|none|point|mirror|rot4|dihedral] [--water %] [--rough %] [--continent %] [--springs N] [--wild %] [--lairs N] [--triggers N] [--portals N] [--teams 1,1,2,2|2v2|ffa] [--win elim,mana,timer|none] [--mana-pct P] [--hold S] [--time M] [--respawn S] [--respawn-level S] [--desecrate S|off] [--bot-skill 1..4] [--result] [--no-debug] [--net N] [--ticks N] [--dump-every N] [--dump-dir D] [--dump-final]] "
                            "[--replay-check N|state:FILE [--replay-ticks T]] "
                            "[--faithful] [--set section.key=value ...] [--config file]");
         return 1;
@@ -860,6 +927,7 @@ int main(int argc, char **argv) {
             mclog(MCLOG_ERROR, "front end: resources missing in %s", s_game.c_str());
             return 1;
         }
+        fe_mode_register();                                     // round 12: the Conquest screens (fe_mode.h)
         g_hook_player_local_input = game_input;
         if (load_mode) {
             const int slot = argc > 3 ? std::atoi(argv[3]) : 0;
@@ -875,8 +943,12 @@ int main(int argc, char **argv) {
             if (rts_quit_after_ticks() > 0) s_quit_after_ticks = rts_quit_after_ticks();   // rts --ticks N (task A)
             sound_load_bank(s_game.c_str(), 0);
             music_load_bank(s_game.c_str(), 0);
+            // round 12: --result (or `result` in the scenario's rts header) ends on the result screen, else mcport
+            // quits with the level as before
+            if (scn_mode ? scn_hdr.rts_result : rts_show_result()) mode_campaign_save();
             if (!rts_begin(s_game.c_str(), mp)) { mclog(MCLOG_ERROR, "rts: the level could not be loaded"); return 1; }
             s_rts = true;
+            s_mode_end = (scn_mode ? scn_hdr.rts_result : rts_show_result()) ? MODE_END_RESULT : MODE_END_QUIT;
             level = MODE_LEVEL_INDEX;
             run = RUN_LEVEL;
         } else if (play) {
@@ -1133,6 +1205,7 @@ int main(int argc, char **argv) {
             env.can_save = savestate_allowed();
             env.level = level;
             env.fullscreen = plat.fullscreen();
+            env.mode_run = s_rts;                                 // round 12: "Forfeit the match"
             s_opts.fullscreen = env.fullscreen ? 1 : 0;           // Alt+Enter may have changed it
             s_menu.open(env, &g_settings, &s_opts);
             release_game_input();
@@ -1246,6 +1319,19 @@ int main(int argc, char **argv) {
             case GameMenuCmd::LOAD: menu_close(); port_act = PORT_KEY_LOAD; port_slot = r.slot; break;
             case GameMenuCmd::LEAVE_LEVEL:
                 menu_close();
+                if (s_rts && run == RUN_LEVEL && !(g_cfg->flags & 0x10)) {
+                    // round 12: forfeit an offline match - the level is left at once (nothing simulated: the run
+                    // ends here), the result screen shows the match as left; `rts` without --result quits
+                    mclog(MCLOG_INFO, "rts: the match is forfeited");
+                    if (s_mode_end == MODE_END_QUIT) { menu_quit = true; break; }
+                    s_interp.reset();
+                    finish_mode_run(true, true);
+                    run = RUN_FE;
+                    break;
+                }
+                // a network match: the original's leave (command 0x1d - the other peers play on); the result
+                // screen follows when the local level loop ends
+                if (s_rts) s_mode_forfeit = true;
                 input_key_event(1, true);                       // the original's Esc (commands 0x1b / 0x1d)
                 deferred_releases.push_back(1);
                 break;
@@ -1347,7 +1433,19 @@ int main(int argc, char **argv) {
                 const FeResult r = fe_frame(frame(), g_timer_ticks, &lvl);
                 apply_releases();
                 if (r == FE_QUIT) break;
-                if (r == FE_START_LEVEL) {
+                if (r == FE_START_MODE || (r == FE_START_LEVEL && mode_flow_lobby_agreed())) {
+                    // round 12: the setup screen's Start (offline), or the lobby's session with the host's mode
+                    const bool lobby = r == FE_START_LEVEL;
+                    if (lobby ? start_lobby_mode_run(&level) : start_menu_mode_run(&level)) {
+                        debug_overlay_reset();
+                        run = RUN_LEVEL;
+                        next_tick = now;
+                    } else {
+                        mclog(MCLOG_ERROR, "rts: the %s match could not be started", lobby ? "lobby's" : "setup screen's");
+                        game_before_frontend();
+                        fe_enter(lobby ? 4 : FE_STATE_MODE_SETUP);
+                    }
+                } else if (r == FE_START_LEVEL) {
                     level = game_after_frontend(lvl);
                     if (!game_level_begin(level)) { mclog(MCLOG_ERROR, "could not load level %d", level); break; }
                     debug_overlay_reset();                     // round 10 (task C): inspector / damage history
@@ -1380,7 +1478,14 @@ int main(int argc, char **argv) {
                     if (s != GAME_RUNNING) {
                         game_level_end();
                         s_interp.reset();
-                        if (s_rts) { in.quit = true; break; }      // a mode run ends with its level (round 12: result screen)
+                        if (s_rts) {
+                            // a mode run ends with its level: the result screen (round 12), or mcport quits (the
+                            // command line's `rts` without --result, Shift+Q)
+                            if (s == GAME_QUIT || s_mode_end == MODE_END_QUIT) { in.quit = true; break; }
+                            finish_mode_run(false, false);
+                            run = RUN_FE;
+                            break;
+                        }
                         if (s == GAME_QUIT) { in.quit = true; break; }
                         game_before_frontend();
                         if (!(g_cfg->flags & 0x10)) fe_enter(5);   // the level result screen (a network game: the lobby again)

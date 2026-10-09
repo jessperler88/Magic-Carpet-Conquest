@@ -8,6 +8,7 @@
 #include "mcfile.h"
 #include "settings.h"
 #include "world.h"
+#include "mode_rules.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -586,7 +587,7 @@ void effect_wizard_castle_update(Thing *t) {
     }
     uint16_t claimer = t->damage_slots[1].attacker;
     if (claimer != 0) {
-        if (claimer != t->mana_owner) {
+        if (!same_side(claimer, t->mana_owner)) {     // round 12: an ally's village stays his
             t->mana_owner = claimer;
             sound_request(claimer, -1, 4);
             t->flags &= ~1u;

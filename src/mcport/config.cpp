@@ -43,6 +43,7 @@ void config_playing_defaults(PortSettings *s) {
     s->possession_range_pct = 130;
     s->keys_wasd = true;            // round 8 (user request): WASD flies, Tab opens the spell book
     s->keys_book_tab = true;  // round 8 (user request): Possession reaches 30 % further
+    s->mode_menu = true;            // round 12: the Conquest urn in the main menu and the lobby
 }
 
 // ---- key names -------------------------------------------------------------------------------------
@@ -209,6 +210,8 @@ const Desc k_desc[] = {
      "Possession (mana claim) range in % of the original (100 = the original: 11 ticks, 20-cell target pick)"},
     {"game", "quicksave_full", K_BOOL, PS(quicksave_full), 0, 1, nullptr,
      "Alt+S quick save / quick load: 1 = the complete state (slot 0), 0 = the original's gam10000.dat"},
+    {"game", "mode_menu", K_BOOL, PS(mode_menu), 0, 1, nullptr,
+     "the Conquest mode's urn in the main menu (setup screen) and the multiplayer lobby (0 = the original's menus)"},
     {"pacing", "interpolate", K_BOOL, PS(interpolate), 0, 1, "MC_INTERPOLATE",
      "draw between the last two ticks (smooth motion above the tick rate; display only)"},
     {"pacing", "fps_cap", K_INT, PS(fps_cap), 0, 1000, "MC_FPS_CAP",

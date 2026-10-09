@@ -15,6 +15,40 @@ bool mode_same_side_records(int rec_a, int rec_b) {
     if (!g_mode_teams || rec_a < 0 || rec_a > 7 || rec_b < 0 || rec_b > 7) return false;
     return g_mode.players[rec_a].side == g_mode.players[rec_b].side;
 }
+// mode_rules.h: the death / kill / castle calls of the simulation into the match rules (installed by mode_rules.cpp)
+void (*g_hook_mode_wizard_died)(Thing *) = nullptr;
+void (*g_hook_mode_creature_died)(Thing *) = nullptr;
+void (*g_hook_mode_castle_gone)(Thing *) = nullptr;
+
+// g_hook_mode_side_of_owner (round 12, task B): everything a wizard owns has the wizard's Thing index as `owner`
+// (thing_create starts every Thing with its own index; spells, projectiles, effects, the castle, balloons and
+// guards copy the wizard's), so the owner is a player record's wizard exactly when it is the record's
+// PlayerRec.thing. Integers and index order only.
+static int side_of_owner(int owner) {
+    if (owner <= 0 || !g_state) return -1;
+    for (int p = 0; p < 8; p++) {
+        const ModePlayer &m = g_mode.players[p];
+        if (!(m.flags & MODE_PLAYER_IN_MATCH)) continue;
+        if ((int)g_state->players[p].thing == owner) return m.side;
+    }
+    return -1;
+}
+
+void mode_rules_sync() {
+    bool teams = false;
+    if (mode_active()) {
+        for (int a = 0; a < 8 && !teams; a++) {
+            if (!(g_mode.players[a].flags & MODE_PLAYER_IN_MATCH)) continue;
+            for (int b = a + 1; b < 8; b++)
+                if ((g_mode.players[b].flags & MODE_PLAYER_IN_MATCH) && g_mode.players[b].side == g_mode.players[a].side) {
+                    teams = true;
+                    break;
+                }
+        }
+    }
+    g_mode_teams = teams;
+    g_hook_mode_side_of_owner = teams ? side_of_owner : nullptr;
+}
 void (*g_hook_mode_tick)() = nullptr;        // player.h (defined here: every unit test links mode.cpp)
 void (*g_hook_mode_level_start)() = nullptr;
 uint32_t (*g_hook_mode_checksum_globals)(uint32_t h) = nullptr;
@@ -45,12 +79,13 @@ void mode_begin(uint32_t mode, const ModeParams &params) {
     r.mode = (int)mode;
     gameplay_force_rules(&r);
     g_hook_mode_tick = mode_tick;
+    mode_rules_sync();
 }
 
 void mode_end() {
     const bool was = mode_active();
     g_mode = ModeState{};
-    g_mode_teams = false;
+    mode_rules_sync();
     if (g_hook_mode_tick == mode_tick) g_hook_mode_tick = nullptr;
     if (was) gameplay_force_rules(nullptr);
 }
@@ -134,5 +169,6 @@ bool mode_deserialise(const uint8_t *in, size_t n) {
     if (m.mode >= GAME_MODE_COUNT) return false;
     g_mode = m;
     g_hook_mode_tick = mode_active() ? mode_tick : nullptr;
+    mode_rules_sync();                               // the sides of the loaded match (g_mode_teams is not in the chunk)
     return true;
 }

@@ -1,4 +1,4 @@
-mc_unit_test(net_test tests/net_test.cpp ${MC_SIM_ALL} mcengine/frontend.cpp mcengine/savegame.cpp
+mc_unit_test(net_test tests/net_test.cpp ${MC_SIM_ALL} mcengine/frontend.cpp mcengine/fe_mode.cpp mcengine/savegame.cpp
     mcengine/ui_draw.cpp mcengine/fli.cpp mcport/net_tcp.cpp)
 target_include_directories(net_test PRIVATE mcport)
 if(WIN32)

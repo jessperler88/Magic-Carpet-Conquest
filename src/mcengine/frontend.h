@@ -101,3 +101,57 @@ void mouse_cursor_draw(const FrameBuffer &fb);
 // Port (round 10): pointers entry `entry` (1 = the spell book / map arrow) at (x, y) in the 640-wide virtual
 // screen, hot spot top-left - the inspector's cursor mode.
 void mouse_cursor_draw_entry(const FrameBuffer &fb, int entry, int x, int y);
+
+// ==== round 12 (port, task A): the Conquest mode's screens (fe_mode.h) =============================================
+// The setup and result screens live in fe_mode.cpp and register themselves here (fe_mode_register(), called by a
+// static initialiser of fe_mode.cpp and by mcport): frontend.cpp never calls fe_mode.cpp directly, so a program that
+// links frontend.cpp without fe_mode.cpp (most tests) builds as before and never shows the urn.
+// The urn (tmaps chunk 116, SpriteDesc 0x4d: the spell urn of the game world, remapped to the screen's palette) is
+// shown bottom right of the main menu and in the multiplayer lobby only when g_settings.mode_menu is on and the
+// screens are registered: with mode_menu off every front-end pixel is the original's.
+struct ModeParams;
+struct FontDesc;                            // ui_draw.h
+struct FeModeScreens {
+    void (*frame)(int state);               // one frame of FE_STATE_MODE_SETUP (11) / FE_STATE_MODE_RESULT (12)
+    const ModeParams *(*params)();          // the setup screen's current choice (the lobby's proposal)
+    void (*open_setup)(int return_state);   // the setup is entered from 2 (main menu: "Start" plays) or 4 (lobby)
+};
+void fe_set_mode_screens(const FeModeScreens *screens);
+bool fe_mode_menu_shown();                  // g_settings.mode_menu and screens registered
+// The lobby's urn: true = the session plays Conquest with the setup's params (mode_set_proposal before the lobby's
+// rules exchange; only the host's proposal counts, net_agree_rules). fe_lobby_set_conquest also updates the proposal.
+bool fe_lobby_conquest();
+void fe_lobby_set_conquest(bool on);
+// Screen rectangles of the urn (320x200 pixels) on the main menu and in the lobby (tests click them).
+void fe_urn_rect_menu(int *x, int *y, int *w, int *h);
+void fe_urn_rect_lobby(int *x, int *y, int *w, int *h);
+
+// ---- the front-end toolkit fe_mode.cpp draws with (320x200 screen pixels, the original's buffers) ----------------
+uint8_t *fe_tk_back();                      // the back buffer (DAT_0012ed74) the screen draws into
+uint8_t *fe_tk_background();                // the background buffer (DAT_000adf68)
+uint8_t *fe_tk_palette();                   // the screen palette (768 bytes, 6-bit)
+const uint8_t *fe_tk_bright();              // its 30 % brighter remap (the main menu's highlight table)
+void fe_tk_present();                       // vga_blit_backbuffer_320_610f0: show the back buffer
+// data/screens/<dat> into the background and <pal> into the palette (+ the bright table); false when missing.
+bool fe_tk_load_screen(const char *dat_rel, const char *pal_rel);
+void fe_tk_fade_out();                      // palette fades as the original's screens do them (a blocker: the
+void fe_tk_fade_in();                       // screen returns and is called again when fe_tk_blocked() is over)
+bool fe_tk_blocked();
+void fe_tk_set_busy(bool busy);             // a blocking sequence of the screen runs (dispatch keeps calling it)
+bool fe_tk_load_fonts();                    // sfont0 / sfont1 / sfont2 (colour 1 remapped, the menu's flags)
+void fe_tk_free_fonts();
+FontDesc *fe_tk_font(int n);
+void fe_tk_text(int x, int y, FontDesc *font, const char *s);    // into the back buffer, clipped to g_ui_clip
+int  fe_tk_text_width(const FontDesc *font, const char *s);
+void fe_tk_pointer(int *x, int *y);         // the pointer in 320x200 pixels
+uint8_t fe_tk_events();                     // the edge flags of fe_input_poll_57cc0 (1 left click, 0x40 right click)
+void fe_tk_clear_events(uint8_t mask);
+void fe_tk_cursor(int entry);               // sptrs entry of the pointer (-1 hidden)
+void fe_tk_set_state(int state);
+void fe_tk_start_mode();                    // leave the front end: fe_frame returns FE_START_MODE
+uint32_t fe_tk_now();                       // the timer tick of the current fe_frame
+uint32_t fe_tk_frame();                     // the front end's frame counter (DAT_0012ed10)
+const char *fe_tk_game_dir();
+// The urn into `dst` (320x200) at (x, y), remapped to the current palette; bright = the hover highlight.
+void fe_tk_draw_urn(uint8_t *dst, int x, int y, bool bright);
+void fe_tk_urn_size(int *w, int *h);

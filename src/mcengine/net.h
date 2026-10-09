@@ -147,6 +147,10 @@ NetGameRules net_local_rules();                                 // this peer's s
 NetGameRules net_agree_rules(const NetGameRules &mine, bool *differs);
 void net_apply_rules(const NetGameRules &rules);
 void net_release_rules();
+// Round 12: the rules net_apply_rules forces right now (false = none applied). After the lobby's join (frontend.cpp
+// mp_join_done: net_agree_rules + net_apply_rules) mcport reads the agreed mode and ModeParams here and starts the
+// mode run with them (mode_level.h mode_start_agreed_net_run) instead of exchanging again.
+bool net_rules_applied(NetGameRules *out);
 
 // ---- state (the DAT_0009e3c8.. globals) ------------------------------------------------------------
 bool net_present();          // DAT_0009e3c8: net_init succeeded

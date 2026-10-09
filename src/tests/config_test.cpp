@@ -69,7 +69,7 @@ static bool settings_equal(const PortSettings &a, const PortSettings &b) {
     for (const std::string &k : config_keys()) {
         const std::string sec = k.substr(0, k.find('.'));
         if (sec != "render" && sec != "display" && sec != "pacing" && k != "game.thing_slots" && k != "game.quicksave_full" &&
-            k != "game.possession_range_pct" &&
+            k != "game.possession_range_pct" && k != "game.mode_menu" &&
             k != "keys.wasd" && k != "keys.book_tab") continue;
         if (config_get(k.c_str(), a, p) != config_get(k.c_str(), b, p)) return false;
     }
@@ -136,7 +136,7 @@ static void test_file() {
     s2.render_extended = true; s2.draw_distance = 97; s2.fog_start_pct = 60; s2.lod = 2; s2.compose = 1;
     s2.view_width = 1920; s2.view_height = 1080; s2.hud_scale_mode = 2; s2.hud_corners = false;
     s2.thing_slots = 12345; s2.interpolate = true; s2.fps_cap = 144; s2.quicksave_full = true;
-    s2.possession_range_pct = 145; s2.keys_wasd = true; s2.keys_book_tab = true;
+    s2.possession_range_pct = 145; s2.keys_wasd = true; s2.keys_book_tab = true; s2.mode_menu = true;
     p2.window_width = 2560; p2.window_height = 1440; p2.fullscreen = 1; p2.display = 1; p2.vsync = false;
     p2.sound = false; p2.sound_volume = 200; p2.music = "midi"; p2.music_volume = 300; p2.tick_hz = 30.5;
     p2.movie_dir = "D:/CARPET/INTRO"; p2.save_slot[3] = {SDL_SCANCODE_F3, KEYMOD_ALT}; p2.quit_now = {};
@@ -199,6 +199,7 @@ static void test_load() {
         config_playing_defaults(&want);
         CHECK(settings_equal(s, want));
         CHECK(!p.faithful);
+        CHECK(s.mode_menu);                                     // round 12: the Conquest urn is on when playing
     }
     // an old file without most keys, plus an unknown one: the missing keys are appended, the unknown one kept
     put_file(dir / "mcport.ini", "# mine\n[game]\ntick_hz = 30\nmy_own_key = 7\n[render]\ndraw_distance = 50\n");
@@ -247,6 +248,7 @@ static void test_load() {
         faithful.fps_cap = 60;
         CHECK(settings_equal(s, faithful));
         CHECK(p.faithful);
+        CHECK(!s.mode_menu);                                    // --faithful: the original's menus
         CHECK_EQ(argc, 1);
         CHECK(p.tick_hz == 30.0);                               // platform options are not touched by --faithful
     }

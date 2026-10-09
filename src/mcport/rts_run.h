@@ -12,6 +12,17 @@
 //   --net N           a network run of N humans (2..8) without the lobby (round 11 session 3): needs MC_NET=1 or
 //                     MC_NET_HOST=<name server>; every instance joins the session "MCRTS" and plays the host's
 //                     (player 0's) options; records N.. are the bots. MC_NET_SYNC=n compares the state every n ticks
+//   round 12, the match rules (MatchRules, mode.h; mode_level.h mode_match_option; 0 / not given = the default):
+//   --teams T         1,1,2,2 (team id per record, 0 = own side) | 2v2 / 1v3 / 2v2v2v2 (team sizes in record order) | ffa
+//   --win W           elim,mana,timer (any of them; default elim,mana) | none (the match never ends by itself)
+//   --mana-pct P      mana dominance: a side holds P % of the world's mana (1..100, default 75)
+//   --hold S          ... for S seconds (1..255, default 30)
+//   --time M          time limit in minutes (1..255; adds `timer` to the win conditions): most castle mana wins
+//   --respawn S       respawn delay at the castle (1..255 s, default 10)
+//   --respawn-level S + S seconds per castle level (1..255, default 5)
+//   --desecrate S|off desecration channel in an enemy courtyard (1..254 s, default 25; off = none)
+//   --bot-skill K     computer wizards 1 easy .. 4 brutal (default: the template's, normal)
+//   --result          when the match's level ends: the result screen, then the main menu (default: mcport quits)
 //   --ticks N         quit after N simulation ticks (= MC_QUIT_AFTER_TICKS; main.cpp reads rts_quit_after_ticks)
 //   --dump-every N    write dump_<tick>.json every N ticks (= MC_DUMP_EVERY)
 //   --dump-dir D      where the dumps go (= MC_DUMP_DIR; default the current directory)
@@ -26,15 +37,22 @@
 bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::string *err);
 long rts_quit_after_ticks();                // --ticks N (0 = not given)
 int  rts_net_players();                     // --net N (0 = offline)
+bool rts_show_result();                     // --result: the result screen at the end instead of quitting (round 12)
 
 // Starts the run (mode_start_run + game_level_begin(MODE_LEVEL_INDEX)). False when the level could not load.
-bool rts_begin(const char *game_dir, const ModeParams &params);
+// How (round 12): RTS_START_CLI = the command line's run (`--net N` joins the session MCRTS first, else offline),
+// RTS_START_OFFLINE = an offline run with `params` (the setup screen's Start), RTS_START_LOBBY = the lobby's session
+// with the rules the lobby agreed on (net.h net_rules_applied: the host's mode + ModeParams; `params` is ignored).
+enum RtsStart { RTS_START_CLI, RTS_START_OFFLINE, RTS_START_LOBBY };
+bool rts_begin(const char *game_dir, const ModeParams &params, RtsStart how = RTS_START_CLI);
 
 // After every simulation tick of the run (main.cpp sim_tick): the periodic dumps.
 void rts_after_tick(long ticks_run);
 
 // The level ended or the program quits: the final dump (--dump-final), mode_stop_run.
 void rts_end();
+// Only the final dump (round 12: the result screen path stops the run itself, mode_flow.h mode_flow_finish).
+void rts_dump_final();
 
 // ---- dumps of any run (rts or not) ----------------------------------------------------------------------
 // MC_DUMP_EVERY=n, MC_DUMP_DIR=dir, MC_DUMP_FINAL=1. rts_parse_args calls it; other runs call it at start-up.

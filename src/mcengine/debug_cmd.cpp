@@ -3,6 +3,7 @@
 #include "debug_cmd.h"
 #include "player.h"
 #include "mode.h"
+#include "mode_rules.h"
 #include "mc_globals.h"
 #include "mc_math.h"
 #include "level.h"
@@ -497,6 +498,13 @@ void debug_cmd_apply(int sender, Thing *, CmdPacket *cmd) {
         if (target < 0) break;
         PlayerRec &rec = g_state->players[target];
         const bool mark = (b(p, 3) & 1) != 0;
+        if (mode_active()) {
+            // round 12: in a mode run `win` / `lose` end the match (MATCH_END_DEBUG); the level ends for every record
+            // MODE_MATCH_END_DELAY_TICKS later by the match rules (mode_rules.h)
+            const bool ended = mode_rules_debug_end(target, cmd->pad2 == DEBUG_END_WIN);
+            say("player %d: match %s%s", target, cmd->pad2 == DEBUG_END_WIN ? "won" : "lost", ended ? "" : " (no match running)");
+            break;
+        }
         if (cmd->pad2 == DEBUG_END_WIN) rec.status = (uint16_t)(mark ? (rec.status | 2) : 10);
         else                            rec.status = (uint16_t)(mark ? (rec.status | 4) : 0xc);
         say("player %d: level %s%s", target, cmd->pad2 == DEBUG_END_WIN ? "won" : "lost", mark ? " (marked)" : "");

@@ -41,6 +41,9 @@
 #include "gen/frontend_tables.h"
 #include "net.h"
 #include "world_set.h"
+#include "settings.h"
+#include "mode.h"
+#include "tmaps.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -124,6 +127,15 @@ static uint32_t s_title_last = 0; static bool s_title_started = false;
 static uint32_t s_now = 0;            // DAT_0012eab4
 static bool     s_busy = false;       // a screen is in the middle of a blocking sequence
 static bool     s_left = false;       // the last fe_frame returned START_LEVEL / START_DEMO
+
+// port (round 12): the Conquest screens (fe_mode.cpp, registered through fe_set_mode_screens) and the urn
+static const FeModeScreens *s_mode_screens = nullptr;
+static bool s_leave_mode = false;     // the setup screen's "Start": fe_frame returns FE_START_MODE
+static bool s_lobby_conquest = false; // the lobby's urn is selected
+static bool s_mp_to_setup = false;    // the lobby is left for the setup screen (and comes back)
+constexpr uint8_t kUrnItem = 12;      // main-menu item id of the urn (no mmmask.dat pixel has it)
+constexpr int kUrnMenuX = 0x11a, kUrnMenuY = 0xa4;     // on the grey book bottom right (320x200 pixels)
+constexpr int kUrnLobbyX = 0x0c, kUrnLobbyY = 0xa6;    // on the map bottom left of the lobby
 
 static uint8_t *cfg_raw(size_t off) { return reinterpret_cast<uint8_t *>(g_cfg) + off; }
 static PlayerRec &local_rec() { return g_state->players[g_state->local_player & 7]; }
@@ -290,6 +302,89 @@ static bool marker_path(const char *name, char *buf, size_t cap) {
     if (s_save_dir.empty()) return false;
     std::snprintf(buf, cap, "%s/%s", s_save_dir.c_str(), name);
     return true;
+}
+
+// =============================================================================================
+// port (round 12): the urn of the Conquest mode (tmaps chunk 116 = SpriteDesc 0x4d's base sprite, the spell urn
+// lying in the game world), remapped from the game palette (data/palette.dat) to the screen's palette
+// =============================================================================================
+
+static struct {
+    bool tried = false, ok = false;
+    int w = 0, h = 0;
+    std::vector<uint8_t> px;          // game palette indices, 0 = transparent
+    uint8_t game_pal[768] = {};
+    uint8_t remap_for[768] = {};      // the screen palette the remap tables were built for
+    bool remapped = false;
+    uint8_t normal[256] = {}, bright[256] = {}, dim[256] = {};
+} s_urn;
+
+static bool urn_load() {
+    if (s_urn.tried) return s_urn.ok;
+    s_urn.tried = true;
+    char path[1024];
+    mc_path_join(path, sizeof path, s_game_dir.c_str(), "data/palette.dat");
+    if (mc_load_rnc_into(path, s_urn.game_pal, sizeof s_urn.game_pal) != (long)sizeof s_urn.game_pal) return false;
+    mc_tmap_set set;
+    if (!mc_tmap_set_load(s_game_dir.c_str(), &set)) return false;
+    mc_tmap tm;
+    if (mc_tmap_get(&set, 116, &tm)) {
+        s_urn.w = tm.width; s_urn.h = tm.height;
+        s_urn.px.assign(tm.pixels, tm.pixels + (size_t)tm.width * tm.height);
+        s_urn.ok = s_urn.w > 0 && s_urn.h > 0;
+        mc_tmap_free(&tm);
+    }
+    mc_tmap_set_free(&set);
+    return s_urn.ok;
+}
+
+// nearest screen colours of every game colour: as it is, 30 % brighter (the menu's highlight) and 40 % darker
+static void urn_remap() {
+    if (s_urn.remapped && std::memcmp(s_urn.remap_for, s_pal, sizeof s_pal) == 0) return;
+    std::memcpy(s_urn.remap_for, s_pal, sizeof s_pal);
+    s_urn.remapped = true;
+    bool used[256] = {};
+    for (uint8_t c : s_urn.px) used[c] = true;
+    for (int c = 1; c < 256; c++) {
+        if (!used[c]) continue;
+        const int r = s_urn.game_pal[c * 3], g = s_urn.game_pal[c * 3 + 1], b = s_urn.game_pal[c * 3 + 2];
+        auto lift = [](int v) { v = v * 130 / 100; return v > 0x3f ? 0x3f : v; };
+        s_urn.normal[c] = (uint8_t)palette_find_nearest(s_pal, r, g, b);
+        s_urn.bright[c] = (uint8_t)palette_find_nearest(s_pal, lift(r), lift(g), lift(b));
+        s_urn.dim[c] = (uint8_t)palette_find_nearest(s_pal, r * 55 / 100, g * 55 / 100, b * 55 / 100);
+    }
+}
+
+// 0 = normal, 1 = bright (hover), 2 = dim (the lobby's urn when the session plays the original game)
+static void urn_draw(uint8_t *dst, int x, int y, int look) {
+    if (!urn_load()) return;
+    urn_remap();
+    const uint8_t *table = look == 1 ? s_urn.bright : look == 2 ? s_urn.dim : s_urn.normal;
+    for (int r = 0; r < s_urn.h; r++) {
+        const int py = y + r;
+        if (py < 0 || py >= 200) continue;
+        for (int c = 0; c < s_urn.w; c++) {
+            const int px = x + c;
+            const uint8_t v = s_urn.px[(size_t)r * s_urn.w + c];
+            if (v && px >= 0 && px < 320) dst[py * 320 + px] = table[v];
+        }
+    }
+}
+
+bool fe_mode_menu_shown() { return g_settings.mode_menu && s_mode_screens != nullptr && urn_load(); }
+static bool urn_hit(int x, int y, int ux, int uy) { return x >= ux && x < ux + s_urn.w && y >= uy && y < uy + s_urn.h; }
+
+void fe_set_mode_screens(const FeModeScreens *screens) { s_mode_screens = screens; }
+void fe_urn_rect_menu(int *x, int *y, int *w, int *h) { urn_load(); *x = kUrnMenuX; *y = kUrnMenuY; *w = s_urn.w; *h = s_urn.h; }
+void fe_urn_rect_lobby(int *x, int *y, int *w, int *h) { urn_load(); *x = kUrnLobbyX; *y = kUrnLobbyY; *w = s_urn.w; *h = s_urn.h; }
+void fe_tk_draw_urn(uint8_t *dst, int x, int y, bool bright) { urn_draw(dst, x, y, bright ? 1 : 0); }
+void fe_tk_urn_size(int *w, int *h) { urn_load(); *w = s_urn.w; *h = s_urn.h; }
+
+bool fe_lobby_conquest() { return s_lobby_conquest; }
+void fe_lobby_set_conquest(bool on) {
+    s_lobby_conquest = on && s_mode_screens != nullptr;
+    if (s_lobby_conquest) mode_set_proposal(GAME_MODE_CONQUEST, *s_mode_screens->params());
+    else mode_set_proposal(GAME_MODE_ORIGINAL, ModeParams{});
 }
 
 // =============================================================================================
@@ -607,12 +702,14 @@ static void fe_main_menu_draw_overlay() {
     if (s_slot_mode != 0) return;
     fe_draw_sprite(0x166, 0xa, spr(s_mmspr, 1));
     fe_draw_sprite(0x150, 0x56, spr(s_mmspr, 2));
+    if (fe_mode_menu_shown()) urn_draw(s_ed74, kUrnMenuX, kUrnMenuY, 0);   // port (round 12): the Conquest urn
 }
 static void overlay_into_bg() { fe_swap(); fe_main_menu_draw_overlay(); fe_swap(); }
 
 // fe_menu_item_enabled_53bf0
 static bool fe_menu_item_enabled() {
     const uint8_t i = s_item;
+    if (i == kUrnItem) return s_slot_mode == 0 && fe_mode_menu_shown();    // port (round 12)
     if (i > 7) {
         if (i == 0xb) return g_fe_game_in_progress == 0;
         return s_slot_mode != 0;
@@ -621,8 +718,15 @@ static bool fe_menu_item_enabled() {
     if (i == 7) return s_slot_mode != 0;
     return true;
 }
-static void fe_menu_select_prev() { do { s_item--; if (s_item < 1) s_item = 0xb; } while (!fe_menu_item_enabled()); }   // 53b90
-static void fe_menu_select_next() { do { s_item++; if (s_item > 0xb) s_item = 1; } while (!fe_menu_item_enabled()); }   // 53bc0
+// port (round 12): the Tab cycle includes the urn (item 12) when it is shown
+static uint8_t fe_menu_last_item() { return fe_mode_menu_shown() ? kUrnItem : 0xb; }
+static void fe_menu_select_prev() { do { s_item--; if (s_item < 1) s_item = fe_menu_last_item(); } while (!fe_menu_item_enabled()); }   // 53b90
+static void fe_menu_select_next() { do { s_item++; if (s_item > fe_menu_last_item()) s_item = 1; } while (!fe_menu_item_enabled()); }   // 53bc0
+// The item under the pointer: the urn's rectangle first (port, round 12), then mmmask.dat.
+static uint8_t fe_menu_item_at(int x, int y) {
+    if (s_slot_mode == 0 && fe_mode_menu_shown() && urn_hit(x, y, kUrnMenuX, kUrnMenuY)) return kUrnItem;
+    return s_mask[y * 320 + x];
+}
 
 // dialog callbacks
 static void fe_load_confirm_draw() {             // 0x54150
@@ -933,6 +1037,7 @@ static void mm_restore_bg_overlay() { fe_copy(s_backup2, s_adf68); overlay_into_
 static void mm_part_b() {
     if ((s_item == 0xb && g_fe_game_in_progress) || s_item == 0) fe_highlight(s_adf68, s_ed74, s_mask, s_bright, 0xff);
     else fe_highlight(s_adf68, s_ed74, s_mask, s_bright, s_item);
+    if (s_item == kUrnItem && fe_menu_item_enabled()) urn_draw(s_ed74, kUrnMenuX, kUrnMenuY, 1);   // port: urn hover
     // (DAT_0009e583 & 0x23: the pointer is drawn into the back buffer here; the port draws it in fe_frame)
     fe_blit();
     if (fe_input_idle_check()) {
@@ -1028,7 +1133,7 @@ static bool mm_part_a() {
     }
     if ((hx(s_cur_x) != s_last_x || hx(s_cur_y) != s_last_y) && hx(s_cur_x) < 0x140 && hx(s_cur_y) < 0xc8) {
         s_last_x = (int16_t)hx(s_cur_x); s_last_y = (int16_t)hx(s_cur_y);
-        s_item = s_mask[s_last_y * 320 + s_last_x];
+        s_item = fe_menu_item_at(s_last_x, s_last_y);
         if (!fe_menu_item_enabled()) s_item = 0;
     }
     if (g_key_down[0x1c]) { g_key_down[0x1c] = 0; s_ev0 |= 1; }    // Enter = click
@@ -1036,12 +1141,20 @@ static bool mm_part_a() {
         g_key_last = 0;
         s_ev0 &= 0xbf;
         if (s_slot_mode) s_slot_mode = 0;
-        s_item = s_mask[s_last_y * 320 + s_last_x];
+        s_item = fe_menu_item_at(s_last_x, s_last_y);
         if (!fe_menu_item_enabled()) s_item = 0;
     }
     if (!(s_ev0 & 1)) return true;
     s_ev0 &= 0xfe;
     if (s_item == 0xb && g_fe_game_in_progress) return true;
+    if (s_item == kUrnItem) {                      // port (round 12): the urn opens the Conquest setup screen
+        if (fe_menu_item_enabled()) {
+            s_mode_screens->open_setup(2);
+            s_state = 11;
+            s_mm_esi = true;
+        }
+        return true;
+    }
     if (item_has_handler(s_item)) {
         switch (s_item) {
         case 1:                                    // fe_menu_new_or_resume_game_57480
@@ -1731,14 +1844,35 @@ static void fe_multiplayer_draw_slots() {        // fe_multiplayer_draw_slots_55
     const uint8_t white = (uint8_t)palette_find_nearest(s_pal, 0x3f, 0x3f, 0x3f);
     const uint8_t other = (uint8_t)palette_find_nearest(s_pal, 0x1a, 0x12, 0xd);
     int y = 0;
-    for (int i = s_lobby_scroll; i < s_lobby_scroll + 5; i++) {
-        s_font1.colour1 = (i == s_lobby_sel) ? white : other;
-        const char *n = fe_level_name(0x33 + i);
-        fe_text((0x5a - fe_width(&s_font1, n)) / 2, y, &s_font1, n);
-        y += font_space_h(&s_font1) - 2;
+    if (fe_mode_menu_shown() && s_lobby_conquest) {
+        // port (round 12): the session plays Conquest - the right page shows the setup instead of the level list
+        const ModeParams &p = *s_mode_screens->params();
+        s_font1.colour1 = white;
+        fe_text((0x5a - fe_width(&s_font1, "Conquest")) / 2, y, &s_font1, "Conquest");
+        y += font_space_h(&s_font1);
+        char line[3][40];
+        std::snprintf(line[0], sizeof line[0], "WORLD %u, BOTS %u", (unsigned)p.world_size, (unsigned)p.bots);
+        std::snprintf(line[1], sizeof line[1], "SEED %u", (unsigned)p.seed);
+        std::snprintf(line[2], sizeof line[2], "CLICK TO SET UP");
+        s_font0.colour1 = other;
+        for (int i = 0; i < 3; i++) {
+            fe_text((0x5a - fe_width(&s_font0, line[i])) / 2, y, &s_font0, line[i]);
+            y += font_space_h(&s_font0) + 1;
+        }
+    } else {
+        for (int i = s_lobby_scroll; i < s_lobby_scroll + 5; i++) {
+            s_font1.colour1 = (i == s_lobby_sel) ? white : other;
+            const char *n = fe_level_name(0x33 + i);
+            fe_text((0x5a - fe_width(&s_font1, n)) / 2, y, &s_font1, n);
+            y += font_space_h(&s_font1) - 2;
+        }
     }
     ui_pop_clip_rect();
     s_font1.colour1 = other;
+    if (fe_mode_menu_shown()) {                   // port (round 12): the urn - dim = the original game, lit = Conquest
+        const bool hover = urn_hit(hx(s_cur_x), hx(s_cur_y), kUrnLobbyX, kUrnLobbyY);
+        urn_draw(s_ed74, kUrnLobbyX, kUrnLobbyY, hover ? 1 : (s_lobby_conquest ? 0 : 2));
+    }
 }
 static void mp_draw_session() {
     ui_push_clip_rect();
@@ -1843,6 +1977,10 @@ static void fe_screen_multiplayer() {            // fe_screen_multiplayer_54bd0
         fe_relocate_plain(s_sfont1);
         fe_font_init(&s_font1, &s_sfont1);
         s_font1.flags &= 0xfffd;
+        if (fe_mode_menu_shown()) {              // port (round 12): the Conquest summary's small font
+            fe_load_table(s_sfont0, "data/screens/sfont0");
+            fe_relocate_plain(s_sfont0);
+        }
         fe_load_file("data\\screens\\pmulti.pal", s_pal, sizeof s_pal);
         fe_load_file("data\\screens\\pmulti.dat", s_adf68, 64000);
         fe_copy(s_adf68, s_ed74);
@@ -1855,6 +1993,7 @@ static void fe_screen_multiplayer() {            // fe_screen_multiplayer_54bd0
     case 2:
         s_flags |= 1;
         s_font1.colour1 = (uint8_t)palette_find_nearest(s_pal, 0x1a, 0x12, 0xd);
+        if (s_sfont0.loaded) { fe_font_init(&s_font0, &s_sfont0); s_font0.flags &= 0xfffd; }   // port (round 12)
         fe_multiplayer_refresh();
         s_mp_phase = 0;
         s_busy = false;
@@ -1887,6 +2026,19 @@ static void fe_screen_multiplayer() {            // fe_screen_multiplayer_54bd0
         return;
     }
     if (g_key_down[1]) { g_key_down[1] = 0; back = true; }
+    if (fe_mode_menu_shown() && (s_ev0 & 1)) {   // port (round 12): the urn and the Conquest summary
+        const bool on_urn = click_in(kUrnLobbyX, kUrnLobbyX + s_urn.w - 1, kUrnLobbyY, kUrnLobbyY + s_urn.h - 1);
+        const bool on_summary = s_lobby_conquest && cur_in(0xad, 0x107, 0x48, 0x85);
+        if (on_urn && s_lobby_conquest) {
+            s_ev0 &= 0xfe;
+            fe_lobby_set_conquest(false);
+        } else if (on_urn || on_summary) {         // the setup screen, then back to the lobby (its "OK" selects)
+            s_ev0 &= 0xfe;
+            s_mode_screens->open_setup(4);
+            s_mp_to_setup = true;
+            back = true;
+        }
+    }
     if (cur_in(0xad, 0x107, 0x48, 0x85)) {
         const int h = font_space_h(&s_font1) - 2;
         if (h) s_lobby_hover = (int16_t)((hx(s_cur_y) - 0x48) / h);
@@ -1911,6 +2063,7 @@ static void fe_screen_multiplayer() {            // fe_screen_multiplayer_54bd0
             s_flags &= 0xef;
             fe_cursor_state();
             s_ev0 &= 0xbe;
+            if (fe_mode_menu_shown()) fe_lobby_set_conquest(s_lobby_conquest);   // port (round 12): the proposal
             const int r = net_session_join_begin(g_cfg->session, g_fe_lobby_players);
             if (r == NET_JOIN_PENDING) { s_mp_phase = 5; s_busy = true; return; }
             if (!mp_join_done(r)) return;
@@ -1953,9 +2106,14 @@ exit_mid:
     fe_clear(s_ed74);
     fe_blit();
     fe_free_table(s_pmultspr); fe_free_table(s_sfont1);
+    if (s_sfont0.loaded) fe_free_table(s_sfont0);    // port (round 12)
     s_flags &= 0xfe;
     if (s_state == 2) music_play_track(4);
-    if (!s_mp_started) {
+    if (s_mp_to_setup) {
+        // port (round 12): to the Conquest setup screen and back - the lobby keeps its player records
+        s_mp_to_setup = false;
+        s_state = 11;
+    } else if (!s_mp_started) {
         // back without a game: restore the player record, the level and the single-player flags
         std::memcpy(&g_state->players[0], reinterpret_cast<uint8_t *>(g_state) + 0x2409, 0x801);
         s_state = 2;
@@ -2104,6 +2262,7 @@ bool fe_init(const char *game_dir, int first_state) {
     s_blk.kind = BK_NONE;
     s_mm = MM_IDLE; s_cfg_phase = 0; s_seq = 0; s_lang_phase = 0; s_lr.phase = 0; s_mp_phase = 0;
     s_ed74 = s_buf_a; s_adf68 = s_buf_b;
+    s_leave_mode = false; s_mp_to_setup = false;
     fe_clear(s_vga);
     g_fe_reload = 1;
     g_fe_leave = 0;
@@ -2131,6 +2290,10 @@ static void dispatch() {                         // the jump table at 0x52038
     case 8: fe_screen_title(); break;
     case 9: fe_screen_bullfrog_logo(); break;
     case 10: fe_screen_outro(); break;
+    case 11: case 12:                            // port (round 12): the Conquest setup / result screens (fe_mode.cpp)
+        if (s_mode_screens) s_mode_screens->frame(st);
+        else s_state = 2;
+        break;
     default: break;
     }
 }
@@ -2181,9 +2344,11 @@ FeResult fe_frame(const FrameBuffer &fb, uint32_t now_ticks, int *level_out) {
                 g_fe_reload = 1;
                 music_stop();
                 if (local_rec().quit) result = FE_QUIT;
+                else if (s_leave_mode) result = FE_START_MODE;     // port (round 12): fe_mode_params()
                 else if (g_cfg->flags & 4) { result = FE_START_DEMO; if (level_out) *level_out = g_cfg->movie; }
                 else { result = FE_START_LEVEL; if (level_out) *level_out = g_cfg->level; }
                 s_left = true;
+                s_leave_mode = false;
                 fe_cursor(-1);
             }
         }
@@ -2192,6 +2357,58 @@ FeResult fe_frame(const FrameBuffer &fb, uint32_t now_ticks, int *level_out) {
     g_video_mode_flags = keep_mode;
     return result;
 }
+
+// ---- port (round 12): the toolkit of fe_mode.cpp (frontend.h) -----------------------------------------------
+uint8_t *fe_tk_back() { return s_ed74; }
+uint8_t *fe_tk_background() { return s_adf68; }
+uint8_t *fe_tk_palette() { return s_pal; }
+const uint8_t *fe_tk_bright() { return s_bright; }
+void fe_tk_present() { fe_blit(); }
+bool fe_tk_load_screen(const char *dat_rel, const char *pal_rel) {
+    char dat[256], pal[256];
+    std::snprintf(dat, sizeof dat, "data/screens/%s", dat_rel);
+    std::snprintf(pal, sizeof pal, "data/screens/%s", pal_rel);
+    const bool ok = fe_load_file(dat, s_adf68, 64000) && fe_load_file(pal, s_pal, sizeof s_pal);
+    fe_build_bright_table();
+    return ok;
+}
+void fe_tk_fade_out() { fe_fade_out(); }
+void fe_tk_fade_in() { fe_fade_in(); }
+bool fe_tk_blocked() { return blocked(); }
+void fe_tk_set_busy(bool busy) { s_busy = busy; }
+bool fe_tk_load_fonts() {
+    const bool ok = fe_load_table(s_sfont0, "data/screens/sfont0") && fe_load_table(s_sfont1, "data/screens/sfont1") &&
+                    fe_load_table(s_sfont2, "data/screens/sfont2");
+    fe_relocate_plain(s_sfont0);
+    fe_font_init(&s_font0, &s_sfont0);
+    s_font0.flags &= 0xfffd;
+    fe_relocate_plain(s_sfont1);
+    fe_font_init(&s_font1, &s_sfont1);
+    s_font1.flags &= 0xfffd;
+    fe_relocate(s_sfont2);                       // as the level result screen: drawn through the sprite blitter
+    s_font2.glyphs = s_sfont2.entries.size() > 1 ? &s_sfont2.entries[1] : nullptr;
+    s_font2.count = s_sfont2.entries.size() > 1 ? (unsigned)s_sfont2.entries.size() - 1 : 0;
+    s_font2.flags = 0x10;
+    return ok;
+}
+void fe_tk_free_fonts() {
+    fe_free_table(s_sfont0); fe_free_table(s_sfont1); fe_free_table(s_sfont2);
+    s_font0.glyphs = s_font1.glyphs = s_font2.glyphs = nullptr;
+    s_font0.count = s_font1.count = s_font2.count = 0;
+}
+FontDesc *fe_tk_font(int n) { return n == 0 ? &s_font0 : n == 1 ? &s_font1 : &s_font2; }
+void fe_tk_text(int x, int y, FontDesc *font, const char *s) { fe_text(x, y, font, s); }
+int fe_tk_text_width(const FontDesc *font, const char *s) { return fe_width(font, s); }
+void fe_tk_pointer(int *x, int *y) { *x = hx(s_cur_x); *y = hx(s_cur_y); }
+uint8_t fe_tk_events() { return s_ev0; }
+void fe_tk_clear_events(uint8_t mask) { s_ev0 &= (uint8_t)~mask; }
+void fe_tk_cursor(int entry) { if (g_fe_input_flags == 0) fe_cursor(entry); }
+// the next screen initialises itself (the Conquest screens never keep DAT_0012ed35 bit 0 set)
+void fe_tk_set_state(int state) { s_state = (uint8_t)state; s_flags &= 0xfe; }
+void fe_tk_start_mode() { s_leave_mode = true; g_fe_leave = 1; }
+uint32_t fe_tk_now() { return s_now; }
+uint32_t fe_tk_frame() { return s_frame; }
+const char *fe_tk_game_dir() { return s_game_dir.c_str(); }
 
 void fe_shutdown() {
     if (s_blk.fli) { fli_close(s_blk.fli); s_blk.fli = nullptr; }

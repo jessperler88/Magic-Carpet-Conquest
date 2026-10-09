@@ -3,6 +3,7 @@
 // disassembly of carpet.exe; the shared bodies are in creature_common.cpp (creatures.h, base = type * 6).
 #include "creatures3.h"
 #include "mc_math.h"
+#include "mode_rules.h"     // same_side (round 12)
 #include "world_set.h"
 #include "gen/creatures3_tables.h"
 
@@ -252,7 +253,7 @@ void creature_type15_s91_update(Thing *t) {
         break;
     case 1: {
         const Thing *a = thing_at(t->last_attacker);
-        if (a->cls == 3 && a->owner != t->owner) {
+        if (a->cls == 3 && !same_side(a->owner, t->owner)) {
             t->target = t->last_attacker;
             thing_set_state(t, 0x5c);
         }
@@ -262,7 +263,7 @@ void creature_type15_s91_update(Thing *t) {
         type15_move(t);
         if (!think_now(t)) break;
         if (t->timer_a == 0) break;
-        Thing *enemy = nearest_enemy_in_fov(t, [t](const Thing *p) { return p->owner != t->owner; });
+        Thing *enemy = nearest_enemy_in_fov(t, [t](const Thing *p) { return !same_side(p->owner, t->owner); });
         if (!enemy) break;
         t->target = thing_index(enemy);
         thing_set_state(t, 0x5c);
@@ -503,7 +504,7 @@ void type15_move(Thing *t) {
     // turn away from the first creature of the same type and another owner within a cell in x and y
     for (uint32_t i = g_cfg->creature_lists[(int8_t)t->type]; i != 0; i = thing_at(i)->next) {
         const Thing *o = thing_at(i);
-        if (o->owner == t->owner) continue;
+        if (same_side(o->owner, t->owner)) continue;
         // (sign-extended operands, no wrap: the original's quirk at 256 cells; a wider world takes the torus
         // difference - round 11 session 3)
         const bool wide = world_wide();

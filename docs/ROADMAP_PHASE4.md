@@ -284,23 +284,38 @@ broadleaf (tmaps1-0 chunk 299) as port sprite `MC_SPRITE_OAK_BURNT`, burnt palm 
   flies the whole world. Effort 25-35 days (the largest round; split: accessors / positions / generator /
   placer / renderer+tests).
 
-### Round 12 - launching the mode: menu, setup screen, lobby, match rules v1
+### Round 12 - launching the mode: menu, setup screen, lobby, match rules v1 - DONE 2026-10-09
 
-- [ ] **Main-menu urn** bottom right (SpriteDesc 0x4d -> tmaps chunk 116, palette-remapped with
+**Status** (branch `round12`; briefing `docs/port/BRIEFING_round12.md`, reports `docs/analysis/port_r12_{fe,rules,bots,
+flow}.md`; 74 ctest tests, every reference identical): all five items below are done and the gate is met headless -
+`mode_flow_test` plays urn -> setup -> a 1024 match with 3 bots -> result screen -> main menu (and the forfeit), and
+`world_net_test`'s lobby part keeps two processes in lockstep through a whole timed Conquest match (0 mismatches,
+both end on the same tick with the same result). Formats: `MatchRules` (32 bytes) inside `ModeParams` (64), MODE
+chunk v2, movie v4 (v1 chunks / v3 movies still load). Differences from the plan: the setup screen is 320x200 in the
+lobby's book (the minimap is `worldgen_preview` on a scratch world, not the radar painter); world sizes 256-4096
+(768 dropped in round 11); day length / blight / bot personalities wait for the rounds that build them; the
+**spring-hold** win waits for round 14 (springs are not claimable yet); no clipboard copy of the seed yet.
+Open (from the reports): on some seeds crab swarms reach a level-1 castle within ~30 s (worldgen density near
+seats, round 13/17 tuning); bots never attack wizards beyond ~32 cells or desecrate, so bot-only matches end on the
+timer and mana dominance never fires there (round 17); "normal" bot skill inherits uneven template knobs per seat;
+skeleton armies still attack their summoner's allies (original rule, mana_owner only); a 2048 preview stalls the
+setup screen ~0.5 s.
+
+- [x] **Main-menu urn** bottom right (SpriteDesc 0x4d -> tmaps chunk 116, palette-remapped with
       `palette_find_nearest`), rectangle hit test before the `mmmask.dat` lookup, drawn only when the mode is
       enabled in settings (keeps the 33 front-end screens identical; `--faithful` hides it). The same icon in
       the multiplayer setup selects the mode for a network game.
-- [ ] **Setup screen** (front-end state 3 / 11 free, lobby as template; 640-wide virtual UI): seed (random /
+- [x] **Setup screen** (front-end state 3 / 11 free, lobby as template; 640-wide virtual UI): seed (random /
       typed), world size 512 / 768 / 1024 / 2048, players and teams, bots count / personalities / difficulty,
       generator sliders (roughness, water, springs, wild density), day length, blight, win conditions, match
       length; a minimap preview rendered by the radar painter from the generated heightmap (generation takes
       well under a second); "copy seed" to the clipboard.
-- [ ] **Match rules v1** in the mode block: teams (`same_side()` replacing the ~25 `owner != owner` tests under
+- [x] **Match rules v1** in the mode block: teams (`same_side()` replacing the ~25 `owner != owner` tests under
       the mode flag), respawn timer at the castle, elimination on castle loss, desecration channel, win by
       elimination / mana dominance / spring hold, timer; result screen with stats (kills, mana, towns, elites).
-- [ ] **Bots v1** = the existing wizard AI (`is_computer`) with the base-game castle loop, so matches are
+- [x] **Bots v1** = the existing wizard AI (`is_computer`) with the base-game castle loop, so matches are
       playable end to end before round 17; AI `rand()` seed hashed / replaced by the mode RNG.
-- [ ] Lobby: `WorldParams` + mode rules exchange, join-in-progress stays off (round 19), host migration kept.
+- [x] Lobby: `WorldParams` + mode rules exchange, join-in-progress stays off (round 19), host migration kept.
 - Gate: a human vs 3 bots match on 1024 from the urn to the result screen; the same match from the network
   lobby between two processes stays in sync (`net_test` mode part). Effort 8-12 days.
 
@@ -549,8 +564,8 @@ display resolution), and the user expects to want it eventually. Until then ever
 | round | theme | days | depends on |
 |---|---|---|---|
 | 10 | debug suite + mode skeleton + movie v3 (**done 2026-10-08**) | 8-10 | - |
-| 11 | world module, int32 positions, generator, placer (**sessions 1-2 of 3 done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
-| 12 | menu urn, setup screen, lobby, rules v1, bots v1 | 8-12 | 11 |
+| 11 | world module, int32 positions, generator, placer (**done 2026-10-08**) | 25-35 | 10 (headless runs, tests) |
+| 12 | menu urn, setup screen, lobby, rules v1, bots v1 (**done 2026-10-09**) | 8-12 | 11 |
 | 13 | plates, numbers, elites, drops, levels | 8-10 | 10 (hook, overlay); 11 (lairs) |
 | 14 | resources, buildings, gatherers, growth, upkeep | 12-16 | 12 |
 | 15 | lair, units, orders, essence, first-person commands | 14-18 | 14 |
@@ -585,11 +600,14 @@ the CPU path is the limit.
 
 ---
 
-## 6. Next: round 12 (launching the mode)
+## 6. Next: round 13 (the RPG layer)
 
-Round 11 is complete on branch `round11` (sessions 1-3; the user merges into main). Round 12 starts from section 4's
-round 12 list. What round 11 hands over: `mode_start_net_run` (mode_level.h) is the call the lobby makes after its
-setup exchange (replacing `rts --net`); `NetGameRules.mode_params` carries the setup; bots die to woken monsters before
-their castle and never respawn without one (round 13's respawn rule); bots roam the whole world for mana (round 17).
+Round 12 is complete on branch `round12` (branched from `round11`; the user merges). Round 13 starts from section 3's
+round 13 list. What round 12 hands over: the match rules live in `mode_rules.{h,cpp}` (sides / `same_side`, respawn,
+elimination, desecration, wins, stats; death / castle hooks `g_hook_mode_*` in mode.cpp) - elite kills and drops add
+stats there; the result screen and the match HUD are `fe_mode.cpp` / `hud_draw_mode` (hud.cpp) and read ModePlayer
+directly; `mode_flow.{h,cpp}` is the menu <-> match flow mcport and the tests share (it saves / restores the campaign
+around a match); bot skill and ally handling are `mode_bots.cpp` / ai_wizard.cpp (`ai_goal_defend_castle`); the
+balance harness is `mode_bots_test <dir> --harness K ...`. ModePlayer has 4 reserved words left, MatchRules 16 bytes.
 Tests that load several levels in one process must reset the carried-over globals (`port_world_test.md`).
 Agents build with `--parallel 2 -- -p:CL_MPCount=1` and run `ctest -j 2`.

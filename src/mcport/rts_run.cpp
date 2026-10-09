@@ -20,6 +20,7 @@ std::string s_dump_dir;
 bool        s_dump_final = false;
 long        s_quit_after = 0;
 int         s_net_players = 0;      // --net N: a network run of N humans (0 = offline)
+bool        s_result = false;       // --result: the result screen when the level ends (round 12) instead of quitting
 long        s_last_tick = -1;      // the last ticks_run rts_after_tick saw (the final dump's number)
 long        s_last_dump = -1;       // ticks_run of the last dump written (no duplicate final dump)
 std::string (*s_extra)() = nullptr;
@@ -91,6 +92,7 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
     dump_configure_from_env();
     s_quit_after = 0;
     s_net_players = 0;
+    s_result = false;
     for (int i = first; i < argc; i++) {
         const char *a = argv[i];
         auto value = [&](uint32_t *dst) {
@@ -141,6 +143,12 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
             else if (!std::strcmp(a, "--triggers")) p.world.features = (uint8_t)((p.world.features & 0xf0) | v);
             else p.world.features = (uint8_t)((p.world.features & 0x0f) | (v << 4));
         }
+        // round 12: the match rules (MatchRules, mode.h; parsed by mode_level.h mode_match_option)
+        else if (a[0] == '-' && a[1] == '-' && mode_match_option_known(a + 2)) {
+            if (i + 1 >= argc) { *err = std::string(a) + " needs a value"; return false; }
+            if (!mode_match_option(a + 2, argv[++i], &p.match, err)) return false;
+        }
+        else if (!std::strcmp(a, "--result")) s_result = true;
         else if (!std::strcmp(a, "--debug")) p.flags |= MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--no-debug")) p.flags &= ~MODE_PARAM_DEBUG;
         else if (!std::strcmp(a, "--ticks")) { if (!value(&v)) return false; s_quit_after = (long)v; }
@@ -164,15 +172,27 @@ bool rts_parse_args(int argc, char **argv, int first, ModeParams *out, std::stri
     }
     if (p.map != 0 && (p.map < 50 || p.map > 69)) { *err = "--map takes a multiplayer level 50..69"; return false; }
     if (p.bots > 7) p.bots = 7;
+    if (!mode_match_rules_finish(&p.match, err)) return false;
     *out = p;
     return true;
 }
 
 long rts_quit_after_ticks() { return s_quit_after; }
 int  rts_net_players() { return s_net_players; }
+bool rts_show_result() { return s_result; }
 
-bool rts_begin(const char *game_dir, const ModeParams &params) {
-    if (s_net_players > 0) {
+bool rts_begin(const char *game_dir, const ModeParams &params, RtsStart how) {
+    if (how == RTS_START_LOBBY) {
+        // round 12: the lobby joined the session and agreed on the host's rules (frontend.cpp mp_join_done ->
+        // net_agree_rules / net_apply_rules with the urn's proposal): start the session's run from them
+        NetGameRules agreed{};
+        if (!net_rules_applied(&agreed) || agreed.mode == GAME_MODE_ORIGINAL) {
+            mclog(MCLOG_ERROR, "rts: the lobby agreed on no mode");
+            return false;
+        }
+        if (!mode_start_agreed_net_run(game_dir, agreed)) { mclog(MCLOG_ERROR, "rts: the session's mode run cannot start"); return false; }
+        mclog(MCLOG_INFO, "rts: lobby session, player %d of %d (host %d)", net_local_player(), net_player_count(), net_host());
+    } else if (how == RTS_START_CLI && s_net_players > 0) {
         // round 11 session 3: a network run without the lobby (round 12 brings the setup screen / lobby): join the
         // session "MCRTS" of s_net_players humans, every peer adopts the host's params (mode_start_net_run)
         if (!net_present()) { mclog(MCLOG_ERROR, "rts --net: no network (MC_NET=1 / MC_NET_HOST=...)"); return false; }
@@ -196,6 +216,7 @@ bool rts_begin(const char *game_dir, const ModeParams &params) {
     mclog(MCLOG_INFO, "rts: mode %s seed %u size %u humans %u bots %u map %u%s%s", mode_name(g_mode.mode), (unsigned)mp.seed,
           (unsigned)mp.world_size, (unsigned)mp.humans, (unsigned)mp.bots, (unsigned)g_mode.template_level,
           (mp.flags & MODE_PARAM_RESEED) ? " (reseeded)" : "", (mp.flags & MODE_PARAM_DEBUG) ? " debug" : "");
+    mclog(MCLOG_INFO, "rts: match rules: %s", mode_match_rules_describe(mp.match).c_str());
     if (mode_params_generated(mp)) {
         const WorldLayout &L = worldgen_last_layout();
         int count[16] = {};
@@ -219,7 +240,11 @@ void rts_after_tick(long ticks_run) {
     dump_after_tick(ticks_run);
 }
 
-void rts_end() {
+void rts_dump_final() {
     if (mode_run_active()) dump_final(s_last_tick);
+}
+
+void rts_end() {
+    rts_dump_final();
     mode_stop_run();
 }

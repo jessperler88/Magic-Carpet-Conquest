@@ -10,6 +10,7 @@
 #include "effects.h"
 #include "world_set.h"
 #include "constructors.h"   // mana_ball_update_sprite
+#include "mode_rules.h"     // same_side (round 12)
 #include "terrain_paint.h"
 #include "level_features.h"
 #include "player.h"
@@ -716,7 +717,7 @@ void effect_skeleton_army_update(Thing *t) {
 void effect_mana_ball_update(Thing *t) {
     DamageSlot &claim = t->damage_slots[1];
     if (claim.attacker != 0) {
-        if (claim.attacker != t->mana_owner) {
+        if (!same_side(claim.attacker, t->mana_owner)) {          // round 12: an ally's ball stays his
             t->mana_owner = claim.attacker;
             sound_request((int16_t)claim.attacker, -1, 4);
             t->flags &= ~0x40u;
@@ -1180,7 +1181,7 @@ void effect_blast_update(Thing *t) {
     }
     for (int i = 1; i < thing_pool_slots(); i++) {
         Thing *p = thing_at(i);
-        if (p->cls == 0 || p->owner == t->owner) continue;
+        if (p->cls == 0 || same_side(p->owner, t->owner)) continue;
         switch (p->cls) {
         case 2: case 5:
             if ((uint32_t)pos_dist_xy(thing_pos(t), thing_pos(p)) < 0xa00) p->health = -1;

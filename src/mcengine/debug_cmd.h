@@ -51,6 +51,9 @@
 //   0x48  level end  target    0 win, 1 lose      b3 1 = only mark (status 2 / 4, the level goes on);
 //                                                  else win = status 10 (won and left, command 0x1b),
 //                                                  lose = status 0xc (lost: the campaign restarts the level)
+//                                                  - a mode run (round 12): ends the match instead (win: the
+//                                                  target's side wins, lose: the best other side; MATCH_END_DEBUG,
+//                                                  mode_rules.h); the level ends for everybody 5 s later
 //   0x49  damage     target    0 wizard, 1 castle b3-6 amount (int32): pending damage in slot 0 (the game's
 //                                                  damage path: shields, invulnerability and god apply)
 //   0x4a..0x5f       reserved

@@ -5,6 +5,7 @@
 #include "ui_draw.h"
 #include "world_set.h"
 #include "world.h"
+#include "mode.h"
 #include <SDL_scancode.h>
 #include <algorithm>
 #include <cstdio>
@@ -190,7 +191,7 @@ std::vector<GameMenu::Row> GameMenu::rows() const {
         add("Save state", A_SAVE_PAGE, 0, states, env_.network ? "not in a network game" : "");
         add("Load state", A_LOAD_PAGE, 0, states);
         add("Options", A_OPTIONS_PAGE);
-        add(env_.network ? "Leave the game" : "Leave level", A_LEAVE);
+        add(env_.mode_run ? "Forfeit the match" : env_.network ? "Leave the game" : "Leave level", A_LEAVE);
         add("Quit Magic Carpet", A_QUIT);
         break;
     case PAGE_SAVE:
@@ -211,7 +212,9 @@ std::vector<GameMenu::Row> GameMenu::rows() const {
                 if (localtime_r(&t, &tmv))
 #endif
                     std::strftime(when, sizeof when, "%Y-%m-%d %H:%M", &tmv);
-                if (world_is_hidden_level(si.level))
+                if (si.level == MODE_LEVEL_INDEX)           // round 12: a Conquest match's state
+                    std::snprintf(value, sizeof value, "conquest  tick %u  %s", si.tick, when);
+                else if (world_is_hidden_level(si.level))
                     std::snprintf(value, sizeof value, "hidden %d  tick %u  %s", si.level - HW_LEVEL_BASE + 1, si.tick, when);
                 else
                     std::snprintf(value, sizeof value, "level %d  tick %u  %s", si.level + 1, si.tick, when);

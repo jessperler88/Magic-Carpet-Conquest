@@ -76,7 +76,7 @@ its data or anything extracted from it.
 
 | Path | What |
 |---|---|
-| `src/` | The port: `mcdata` (C data layer), `mcengine` (the translated game, C++17, no SDL), `mcport` (SDL2 platform, the executable), `tests/` (60 ctest tests). |
+| `src/` | The port: `mcdata` (C data layer), `mcengine` (the translated game, C++17, no SDL), `mcport` (SDL2 platform, the executable), `tests/` (74 ctest tests). |
 | `tools/mctools/` | Python toolkit: RNC decoder, LE parser, level / sprite / tmaps / palette decoders, data extractor. |
 | `tools/port/` | Table generators run by the build (`gen_exe_tables.py`, `gen_dispatch.py`), OPL check, PPM to PNG. |
 | `tools/analysis/` | Helpers for the Ghidra export and the name files (see its README). |
@@ -145,7 +145,20 @@ extension and a custom Watcom calling-convention spec (`x86watcom.cspec`),
 Python 3.13 (`propack`, `pillow`, `pyghidra`), vcpkg with `sdl2:x64-windows`,
 Visual Studio 18 Build Tools, CMake 4.3.
 
-## Where things stand (2026-10-08, Conquest round 11 complete - branch `round11`)
+## Where things stand (2026-10-09, Conquest round 12 complete - branch `round12`)
+
+- **Conquest from the menus**: a red urn bottom right of the main menu opens the setup screen (seed, world size,
+  bots and their skill, teams, win conditions, respawn / desecration times, every generator control, a minimap
+  preview of the world); the match plays by the **match rules v1** - respawn at your castle after a countdown, out of
+  the match when you die without a castle, enemy castles razed by hovering in their courtyard (desecration), won by
+  elimination, mana dominance or a time limit - and ends on a **result screen** with every wizard's stats. The
+  multiplayer lobby has the same urn (the session plays the host's setup; two processes stay in lockstep through a
+  whole match). Bots respect allies, defend their castle and have four skill levels. `--faithful` (or
+  `[game] mode_menu = 0`) shows the original menus. New `rts` options: `--teams --win --time --mana-pct --hold
+  --respawn --respawn-level --desecrate --bot-skill --result` (see `docs/CONTROLS.md`). 74 ctest tests, every
+  reference identical. Reports `docs/analysis/port_r12_{fe,rules,bots,flow}.md`.
+
+## Before that (2026-10-08, Conquest round 11 complete - branch `round11`)
 
 - **Round 11 session 3**: creatures wake near any wizard (bots included) in a Conquest run; Conquest runs over the
   network - `MC_NET=1 mcport <dir> rts --net 2 --size 1024 --bots 3` on each machine (no lobby yet: everybody plays

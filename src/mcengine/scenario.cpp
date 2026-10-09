@@ -8,6 +8,7 @@
 #include "level.h"
 #include "world.h"
 #include "worldgen.h"
+#include "mode_level.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -862,7 +863,8 @@ bool cmd_check(const Assertion &a, std::string *detail) {
         const int p = a.who.n < 0 ? local_player() : a.who.n;
         const int st = g_state->players[p].status;
         const int bits = st & 6;
-        ok = a.status == 0 ? bits == 0 : a.status == 2 ? (st & 2) != 0 : (st & 6) == 4;
+        // round 12: a mode run's lost match ends the level with status 8 (mode_rules.cpp)
+        ok = a.status == 0 ? bits == 0 : a.status == 2 ? (st & 2) != 0 : ((st & 6) == 4 || (mode_active() && st == 8));
         std::snprintf(b, sizeof b, "status of p%d = %d", p, st);
         break;
     }
@@ -927,6 +929,13 @@ bool scenario_parse(const std::string &text, const std::string &name, Scenario *
                 if (k == "reseed") { p.flags |= MODE_PARAM_RESEED; continue; }
                 if (k == "tiled") { p.flags |= MODE_PARAM_TILED; continue; }
                 if (k == "generate") { p.flags |= MODE_PARAM_GENERATE; continue; }
+                if (k == "result") { out->rts_result = true; continue; }
+                if (mode_match_option_known(k)) {           // round 12: the match rules (mode_level.h)
+                    std::string merr;
+                    if (i + 1 >= w.size()) return err("rts " + k + " needs a value");
+                    if (!mode_match_option(k, w[++i], &p.match, &merr)) return err("rts " + merr);
+                    continue;
+                }
                 if (k == "symmetry" && i + 1 < w.size()) {
                     const int s = worldgen_symmetry_parse(lower(w[++i]).c_str());
                     if (s < 0) return err("rts symmetry auto|none|point|mirror|rot4|dihedral");
@@ -950,6 +959,10 @@ bool scenario_parse(const std::string &text, const std::string &name, Scenario *
             }
             if (p.world_size < 256 || p.world_size > 4096 || (p.world_size & (p.world_size - 1)))
                 return err("rts size: a power of two 256..4096");
+            {
+                std::string merr;
+                if (!mode_match_rules_finish(&p.match, &merr)) return err("rts " + merr);
+            }
             out->rts = true;
             out->rts_params = p;
             continue;

@@ -23,7 +23,9 @@
 #pragma once
 #include "mode.h"
 #include "mc_types.h"
+#include <string>
 
+struct NetGameRules;    // net.h
 // The template level a run with `params` plays (50..69), -1 when levels.dat is missing.
 int mode_template_level(const char *game_dir, const ModeParams &params);
 
@@ -49,6 +51,46 @@ bool mode_run_active();                 // between mode_start_run and mode_stop_
 // started with the host's params. Records 0..humans-1 are the session's players, the rest computer wizards
 // (players_init_records). Then load MODE_LEVEL_INDEX as usual. *differs: some peer proposed other rules / params.
 bool mode_start_net_run(const char *game_dir, uint32_t mode, const ModeParams &params, bool *differs);
+
+// ---- round 12 (task D): the lobby path, the menu flow, the match-rule options ------------------------------------
+// mode_start_net_run in two halves, so the lobby (frontend.cpp mp_join_done, which already exchanged NetGameRules with
+// the urn's proposal, mode_set_proposal) does not exchange twice:
+//   mode_net_agree: this peer's run started with `params` (its pool proposed), net_agree_rules, the run stopped again;
+//                   *agreed = the host's rules. False without a session or when the run cannot start.
+//   mode_start_agreed_net_run: the run of the session from the agreed rules - humans := the session's player count,
+//                   bots trimmed to 8 records (mode_net_session_params), net_apply_rules, Config.flags |= 0x10,
+//                   mode_start_run. False when the rules carry no mode / no session.
+bool mode_net_agree(const char *game_dir, uint32_t mode, const ModeParams &params, NetGameRules *agreed, bool *differs);
+bool mode_start_agreed_net_run(const char *game_dir, const NetGameRules &agreed);
+ModeParams mode_net_session_params(const ModeParams &params, int session_players);
+
+// The campaign's progress while a mode run from the menu / the lobby borrows the game state (Config.level, the
+// .gam's spells GameState+0x3bd6 and options +0x2195 - a mode level clears spell_found and its level end moves
+// Config.level): saved before the run, put back when it ended. save is a no-op while a save is held (a mode state
+// loaded during a mode run); restore releases it.
+void mode_campaign_save();
+void mode_campaign_restore();
+bool mode_campaign_saved();
+
+// What the result screen shows (fe_mode_set_result): the final mode block. `forfeit`: the local record left the match
+// (the pause menu's "Forfeit" offline) - it is marked eliminated and a running match is shown as over without a
+// winner (match_state MATCH_OVER, end_reason MATCH_END_NONE). g_mode is not changed.
+ModeState mode_result_snapshot(int local_record, bool forfeit);
+
+// Match rules from the command line (`rts --teams 2v2 ...`, rts_run.h) and the scenario header (`rts ... teams 2v2`).
+// `key` without the leading dashes: teams, win, mana-pct, hold, time, respawn, respawn-level, desecrate, bot-skill
+// ('_' = '-'). mode_match_option_known: whether `key` is one of them (all take a value).
+//   teams   1,1,2,2 (team id 0..8 per record, 0 = own side) | 2v2 / 1v3 / 2v2v2v2 (team sizes in record order) | ffa
+//   win     elim,mana,timer (any of them) | none          mana-pct 1..100     hold 1..255 (seconds)
+//   time    1..255 (minutes)    respawn 1..255 (s)    respawn-level 1..255 (s)    desecrate 1..254 (s) | off
+//   bot-skill 1..4 (easy .. brutal)
+// mode_match_rules_finish after the last option: a time limit adds MATCH_WIN_TIMER to the win bits (the default
+// bits written out first) unless the win is `none`; `--win timer` without a time limit is an error.
+bool mode_match_option_known(const std::string &key);
+bool mode_match_option(const std::string &key, const std::string &value, MatchRules *m, std::string *err);
+bool mode_match_rules_finish(MatchRules *m, std::string *err);
+// "win elim+mana, mana 75% for 30 s, respawn 10+5/level s, desecrate 25 s, teams 1,1,2,2" (log lines)
+std::string mode_match_rules_describe(const MatchRules &m);
 
 // A savestate written during a mode run (its MODE chunk) starts that run again so the state can be loaded:
 // mcport's load_state_slot calls this before game_level_begin(header.level) when header.level is

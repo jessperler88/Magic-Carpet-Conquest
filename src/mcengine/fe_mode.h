@@ -25,3 +25,17 @@ void fe_mode_set_params(const ModeParams &p);   // e.g. the last match's setup, 
 void fe_mode_set_result(const ModeState &final_state, int local_record);
 const ModeState &fe_mode_result();
 int fe_mode_result_local();
+
+// ==== additions by task A (round 12) ================================================================================
+// Registers the screens with the front end (frontend.h fe_set_mode_screens). A static initialiser of fe_mode.cpp calls
+// it already (any program that links fe_mode.cpp); mcport calls it once more at start-up. Idempotent.
+void fe_mode_register();
+// The screen after the result screen: 2 = the main menu, 4 = the multiplayer lobby. fe_mode_set_result picks 4 when
+// Config.flags has the network bit (0x10) at that moment, else 2; this overrides it (call after fe_mode_set_result).
+void fe_mode_result_return_to(int state);
+// The setup screen's seed is always a concrete number: its "new seed" (a click on SEED, key R, the first visit when
+// fe_mode_set_params was never called) rolls one at once, so fe_mode_params() is exactly what the preview showed.
+// The minimap preview (tests): how many worlds were generated so far, the last 64 x 64 image (palette indices of the
+// setup screen's palette) and its seat count. false = none yet.
+int  fe_mode_preview_generations();
+bool fe_mode_preview_image(uint8_t *out_64x64, int *seats);

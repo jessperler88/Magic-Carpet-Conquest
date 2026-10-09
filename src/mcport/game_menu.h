@@ -24,6 +24,8 @@ struct GameMenuEnv {
     bool can_save = true;        // savestate_allowed() (not while a movie plays / records)
     int  level = 0;              // the level being played (0-based, for the title)
     bool fullscreen = false;     // the platform's current state (the Fullscreen row)
+    bool mode_run = false;       // round 12: a Conquest match - "Leave level" reads "Forfeit the match" (LEAVE_LEVEL;
+                                 // main.cpp shows the result screen)
 };
 
 enum class GameMenuCmd { NONE, RESUME, SAVE, LOAD, LEAVE_LEVEL, QUIT, FULLSCREEN };

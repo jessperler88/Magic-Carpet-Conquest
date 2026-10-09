@@ -8,6 +8,7 @@
 #include "tmaps.h"
 #include "settings.h"
 #include "mode.h"
+#include "mode_rules.h"
 #include "tick_profile.h"
 #include <cstring>
 #include <vector>
@@ -844,7 +845,7 @@ Thing *thing_find_in_sight_of_class(Thing *t, int cls) {
         Thing *o = thing_at((unsigned)i);
         if ((int8_t)o->cls != (int)(uint8_t)cls) continue;
         if (o->flags & 0x20) continue;
-        if (o->owner == t->owner) continue;
+        if (same_side(o->owner, t->owner)) continue;       // round 12 (no caller in the port)
         if (o->health < 0) continue;
         int range = (int16_t)mc_move_desc(t->desc)->sight_radius;
         if ((uint32_t)pos_dist_xyz(thing_pos(o), thing_pos(t)) <= (uint32_t)range) found = o;

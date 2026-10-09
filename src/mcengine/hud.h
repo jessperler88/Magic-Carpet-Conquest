@@ -61,6 +61,11 @@ void ui_fill_bar(int x, int y, int max_w, int h, int value, int colour);   // ui
 // PlayerRec.flags & 8 (Alt+V). Sets Config.debug_bits bit 0 (bit 1 for the password 0xf851b9).
 void ui_draw_debug_overlay();
 
+// Port (round 12): the Conquest match HUD for record `local` (match timer, respawn countdown, "eliminated",
+// desecration progress, the victory / defeat banner). render_frame draws it in flight when a mode is active; draw
+// only, nothing when no mode is active.
+void hud_draw_mode(int local);
+
 // Port only: where the Alt+X screenshot (debug_screenshot_3ca00) is written; null = current directory.
 extern const char *g_hud_screenshot_dir;
 // Joystick present (DAT_0012ed40): draws the book cell outline under the pointer. 0 in the port.

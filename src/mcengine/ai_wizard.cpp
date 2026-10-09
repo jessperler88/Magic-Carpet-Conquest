@@ -12,6 +12,7 @@
 #include "level_features.h"
 #include "world_set.h"
 #include "mode.h"
+#include "mode_rules.h"
 #include "gen/ai_wizard_tables.h"
 #include <cstring>
 
@@ -499,6 +500,12 @@ void ai_record_threat_from_projectiles() {
         Thing *target = thing_or_null(proj->target);
         if (!target) continue;
         proj->flags |= 0x2000;
+        // port (round 12): in a mode run with teams a shot at an ally's wizard / castle / balloon / mana raises no
+        // threat (no grudge against a team mate). Without teams same_side of two different owners is false.
+        {
+            const Thing *victim = target->cls == 10 ? thing_or_null(target->mana_owner) : target;
+            if (victim && victim->owner != shooter->owner && same_side(victim->owner, shooter->owner)) continue;
+        }
         int shooter_no = player_block(shooter)->player_no;
         bool heavy = (proj->type >= 3 && proj->type <= 4) || proj->type == 0xb ||
                      (proj->type == 0x10 && engine1995());          // 1995 (CD 0x165f5 / 0x16704): Fire Wall too
@@ -577,6 +584,10 @@ Thing *ai_find_mana_ball_target(Thing *t) {
     Thing *castle = thing_ref(P->castle);                            // things[0] when none
     const Pos *castle_pos = thing_pos(castle);
     const Pos *self_pos = thing_pos(t);
+    // port (round 12): in a mode run a wizard with a castle measures free balls from the castle too (the original
+    // measures from itself, which on a big world draws the bots hundreds of cells from home: one balloon ferries the
+    // mana back, the undefended castle falls to the wild creatures; docs/analysis/port_r12_bots.md)
+    const Pos *free_origin = (mode_active() && P->castle != 0) ? castle_pos : self_pos;
     Thing *best = nullptr;
     uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->mana_ball_list); w.ok(); w.next()) {
@@ -584,9 +595,11 @@ Thing *ai_find_mana_ball_target(Thing *t) {
         Thing *owner = thing_ref(ball->mana_owner);
         uint64_t d;
         if (owner->cls != 3) {
-            d = dist_sq_u(self_pos, thing_pos(ball));
+            d = dist_sq_u(free_origin, thing_pos(ball));
         } else {
             if (ball->mana_owner == (uint16_t)(int16_t)t->owner) continue;
+            // port (round 12): an ally's mana is not claimed (mode run with teams; never true otherwise)
+            if (owner->owner != t->owner && same_side(owner->owner, t->owner)) continue;
             int threat = threat_of(P, player_block(owner)->player_no);
             if (hostility_threshold(owner, P) < threat) {
                 d = dist_sq_u(castle_pos, thing_pos(ball));
@@ -722,7 +735,7 @@ int ai_goal_attack_castle(Thing *t) {
     uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
-        if (p->owner == t->owner || p->type != 2) continue;
+        if (same_side(p->owner, t->owner) || p->type != 2) continue;      // port (round 12): allies' castles too
         Thing *owner = thing_ref(p->owner);
         int threat = threat_of(P, player_block(owner)->player_no);
         bool candidate = false;
@@ -751,7 +764,7 @@ int ai_goal_attack_wizard(Thing *t) {
     uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
-        if (p->owner == t->owner) continue;
+        if (same_side(p->owner, t->owner)) continue;                 // port (round 12): allied wizards too
         if (p->type != 0 && p->type != 1) continue;
         if (ai_spell_in_progress(p, 0xc)) continue;                 // invisible
         PlayerBlock *Q = player_block(p);
@@ -783,7 +796,7 @@ int ai_goal_attack_type3(Thing *t) {
     uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
-        if (p->owner == t->owner || p->type != 3) continue;
+        if (same_side(p->owner, t->owner) || p->type != 3) continue;     // port (round 12): allies' balloons too
         Thing *owner = thing_ref(p->owner);
         PlayerBlock *Q = player_block(owner);
         int threat = threat_of(P, Q->player_no);
@@ -807,7 +820,7 @@ int ai_goal_creature_near_rival(Thing *t) {
     for (int list = 0; list < 20; list++) {
         for (ListWalk w(g_cfg->creature_lists[list]); w.ok(); w.next()) {
             Thing *c = w.get();
-            if (c->owner == t->owner) continue;
+            if (same_side(c->owner, t->owner)) continue;
             for (int p = 0; p < g_state->player_count && p < 8; p++) {
                 Thing *wiz = thing_ref(g_state->players[p].thing);
                 if (wiz->type != 1) continue;
@@ -834,8 +847,42 @@ int ai_goal_hunt_creature(Thing *t) {
     for (int list = 0; list < 20; list++) {
         for (ListWalk w(g_cfg->creature_lists[list]); w.ok(); w.next()) {
             Thing *c = w.get();
-            if (c->owner == t->owner || c->mana <= 0) continue;
+            if (same_side(c->owner, t->owner) || c->mana <= 0) continue;  // port (round 12): allies' creatures too
             uint64_t d = dist_sq_u(origin, thing_pos(c));
+            if (d < best_d) { best = c; best_d = d; }
+        }
+    }
+    if (!best) return 0;
+    set_target(t, best);
+    return 1;
+}
+
+// port (round 12, mode runs only): the nearest visible enemy wizard (2) or else live creature of another side (1)
+// within 24 cells of the own castle.
+int ai_goal_defend_castle(Thing *t) {
+    if (!mode_active() || !ai_has_any_attack_spell(t)) return 0;
+    Thing *castle = thing_or_null(player_block(t)->castle);
+    if (!castle) return 0;
+    constexpr uint64_t kRadiusSq = (uint64_t)0x1800 * 0x1800;
+    Thing *best = nullptr;
+    uint64_t best_d = kRadiusSq + 1;
+    // an enemy wizard at the castle first (a desecration channel, mode_rules.h), then the creatures
+    for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
+        Thing *p = w.get();
+        if ((p->type != 0 && p->type != 1) || (p->state != 0 && p->state != 1)) continue;
+        if (same_side(p->owner, t->owner) || ai_spell_in_progress(p, 0xc)) continue;
+        uint64_t d = dist_sq_u(thing_pos(castle), thing_pos(p));
+        if (d < best_d) { best = p; best_d = d; }
+    }
+    if (best) {
+        set_target(t, best);
+        return 2;
+    }
+    for (int list = 0; list < 20; list++) {
+        for (ListWalk w(g_cfg->creature_lists[list]); w.ok(); w.next()) {
+            Thing *c = w.get();
+            if (c->health <= 0 || same_side(c->owner, t->owner)) continue;
+            uint64_t d = dist_sq_u(thing_pos(castle), thing_pos(c));
             if (d < best_d) { best = c; best_d = d; }
         }
     }
@@ -864,6 +911,7 @@ int ai_choose_goal(Thing *t) {
     int period = ai_think_period(player_block(t)->ai_reaction);
     if (period != 0 && t->tick % period != 0) return 1;              // (period 0 would divide by zero in the original)
     if (ai_goal_upgrade_castle(t)) return ai_set_mode(t, 1);
+    if (int d = ai_goal_defend_castle(t)) return ai_set_mode(t, d == 2 ? 8 : 0xd);     // port (round 12): mode runs only
     if (ai_goal_attack_castle(t)) return ai_set_mode(t, 7);
     if (ai_goal_attack_wizard(t)) return ai_set_mode(t, 8);
     if (ai_goal_attack_type3(t)) return ai_set_mode(t, 9);
@@ -962,6 +1010,14 @@ int ai_mode11_return_home(Thing *t) {
 int ai_mode6_collect_mana(Thing *t) {
     Thing *target = thing_ref(t->target);
     if (!ai_target_valid(t, target)) return 0;
+    {
+        // port (round 12): an ally claimed the ball on the way (its signature does not change): choose again
+        const Thing *o = thing_or_null(target->mana_owner);
+        if (o && o->cls == 3 && o->owner != t->owner && same_side(o->owner, t->owner)) {
+            ai_set_mode(t, 0);
+            return 0;
+        }
+    }
     t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
     if (!ai_approach_target(t, target, 0x400, 0xc00)) return 1;
     if (ai_cast_spell(t, 3)) {

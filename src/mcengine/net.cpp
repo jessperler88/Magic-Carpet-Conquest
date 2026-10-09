@@ -871,6 +871,7 @@ NetGameRules net_agree_rules(const NetGameRules &mine, bool *differs) {
 }
 
 static bool s_rules_applied = false;
+static NetGameRules s_applied_rules{};
 void net_apply_rules(const NetGameRules &rules) {
     thing_pool_force_slots((int)rules.thing_slots);
     GameplayRules g;
@@ -878,10 +879,16 @@ void net_apply_rules(const NetGameRules &rules) {
     g.mode = (int)rules.mode;
     gameplay_force_rules(&g);
     s_rules_applied = true;
+    s_applied_rules = rules;
 }
 void net_release_rules() {
     if (!s_rules_applied) return;
     thing_pool_force_slots(0);
     gameplay_force_rules(nullptr);
     s_rules_applied = false;
+    s_applied_rules = NetGameRules{};
+}
+bool net_rules_applied(NetGameRules *out) {
+    if (out) *out = s_applied_rules;
+    return s_rules_applied;
 }

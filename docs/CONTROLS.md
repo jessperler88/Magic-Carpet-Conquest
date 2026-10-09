@@ -77,9 +77,28 @@ menu key (Esc) can be rebound in the `[keys]` section of `mcport.ini`.
 | Key | Action |
 |---|---|
 | **Shift+Q** | Quit to the menu |
-| **Shift+R** | Restart the level |
+| **Shift+R** | Restart the level (not in a Conquest match) |
 | **Shift+K** | Kill your own wizard |
 | **Shift+L** | Destroy your own castle |
+
+## Conquest (the new mode)
+
+The red **urn** bottom right of the main menu opens the Conquest setup (`[game] mode_menu = 0` in `mcport.ini` or
+`--faithful` hides it). On the setup screen **left click** steps a value forward, **right click** back; **arrows /
+Tab** move between rows, **Enter** starts the match, **Esc** goes back; the line at the bottom explains the row under
+the pointer, the map on the right page previews the world. In the multiplayer lobby the same urn makes the session a
+Conquest match with the host's setup.
+
+In a match: when you die, the HUD counts down until you can rise again at your castle (**Space** then respawns you).
+Without a castle a dead wizard is out of the match and watches. Hovering inside an enemy castle's courtyard desecrates
+it (a bar shows the progress, yours and theirs). The match ends by elimination, mana dominance (75 % of the world's
+mana for 30 s) or the time limit; then the result screen shows every wizard's kills, deaths, castles razed and peak
+mana. **Esc → Forfeit the match** leaves early.
+
+From the command line: `mcport.exe "<game folder>" rts --size 1024 --bots 3` plus any of `--seed S`, `--teams
+2v2|1,1,2,2|ffa`, `--win elim,mana,timer|none`, `--time MIN`, `--mana-pct P`, `--hold S`, `--respawn S`,
+`--respawn-level S`, `--desecrate S|off`, `--bot-skill 1..4` (easy .. brutal), `--result` (show the result screen at
+the end instead of quitting) and the world generator options in the README.
 
 ## Controller (Xbox / PlayStation / Switch pads)
 

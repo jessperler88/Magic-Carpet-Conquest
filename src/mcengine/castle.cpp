@@ -12,6 +12,8 @@
 #include "level_features.h"
 #include "mc_math.h"
 #include "world_set.h"
+#include "mode.h"
+#include "mode_rules.h"
 #include <cstring>
 
 // The original reaches the owner's player block as things[(i16)castle.owner].player (`movsx` of
@@ -300,6 +302,7 @@ void castle_collapse_level(Thing *t) {
     }
     if (t->aux == 0) {
         castle_spell_reset_charge(t, 0);
+        if (mode_active() && g_hook_mode_castle_gone) g_hook_mode_castle_gone(t);   // port (round 12): match stats
         owner_block(t)->castle = 0;
         thing_mark_delete(t);
     }

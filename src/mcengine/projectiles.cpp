@@ -7,6 +7,7 @@
 #include "level_features.h"   // castle_site_clear_at_pos_11be0
 #include "player.h"           // player_block, player_set_combat_music_timer_40b50
 #include "mc_math.h"
+#include "mode_rules.h"         // same_side (round 12)
 
 uint16_t g_projectile_null_hit_index = 0;
 
@@ -659,7 +660,7 @@ int projectile_pick_target(Thing *t) {
     case 9: {                                                   // 0x45f30
         for (uint32_t i = g_cfg->player_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if (o->owner == t->owner) continue;
+            if (same_side(o->owner, t->owner)) continue;
             if (o->flags & 0x20) continue;
             uint32_t range = (uint32_t)(t->max_health * (int32_t)t->speed_base);
             if ((uint32_t)pos_dist_xyz(thing_pos(o), thing_pos(t)) > range) continue;
@@ -671,7 +672,7 @@ int projectile_pick_target(Thing *t) {
         for (int list = 0; list < 20; list++) {
             for (uint32_t i = g_cfg->creature_lists[list]; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
                 Thing *o = thing_at(i);
-                if (o->owner == t->owner) continue;
+                if (same_side(o->owner, t->owner)) continue;
                 if (o->timer_a == 0) continue;
                 uint32_t s = projectile_target_score(t, o, 0x71, 0x200);
                 if (s >= best) continue;
@@ -690,7 +691,7 @@ int projectile_pick_target(Thing *t) {
         const Thing *owner = thing_ref((int16_t)t->owner);
         for (uint32_t i = g_cfg->player_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if (o->owner == t->owner) continue;
+            if (same_side(o->owner, t->owner)) continue;
             if (o->flags & 0x20) continue;
             uint32_t range = (uint32_t)(int32_t)(int16_t)mc_move_desc(owner->desc)->sight_radius;
             if ((uint32_t)pos_dist_xyz(thing_pos(o), thing_pos(t)) > range) continue;
@@ -702,7 +703,7 @@ int projectile_pick_target(Thing *t) {
         for (int list = 0; list < 20; list++) {
             for (uint32_t i = g_cfg->creature_lists[list]; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
                 Thing *o = thing_at(i);
-                if (o->owner == t->owner) continue;
+                if (same_side(o->owner, t->owner)) continue;
                 if (o->timer_a == 0) continue;
                 uint32_t s = projectile_target_score(t, o, cone, 0x71);
                 if (s >= best) continue;
@@ -721,7 +722,7 @@ int projectile_pick_target(Thing *t) {
         const int32_t reach = (int32_t)(0x1400 * gameplay_rules().possession_range_pct / 100);
         for (uint32_t i = g_cfg->mana_ball_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if ((int32_t)o->mana_owner == (int32_t)(int16_t)t->owner) continue;
+            if (same_side((int32_t)o->mana_owner, (int32_t)(int16_t)t->owner)) continue;
             if (o->timer_a == 0) continue;
             uint32_t s = projectile_target_score(t, o, 0x71, 0x71, reach);
             if (s >= best) continue;
@@ -730,7 +731,7 @@ int projectile_pick_target(Thing *t) {
         }
         for (uint32_t i = g_cfg->wizard_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if ((int32_t)o->mana_owner == (int32_t)(int16_t)t->owner) continue;
+            if (same_side((int32_t)o->mana_owner, (int32_t)(int16_t)t->owner)) continue;
             if (o->timer_a == 0) continue;
             uint32_t s = projectile_target_score(t, o, 0x71, 0x71, reach);
             if (s >= best) continue;
@@ -760,7 +761,7 @@ int projectile_pick_target(Thing *t) {
         const Thing *owner = thing_ref((int16_t)t->owner);
         for (uint32_t i = g_cfg->player_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) {
             Thing *o = thing_at(i);
-            if (o->owner == t->owner) continue;
+            if (same_side(o->owner, t->owner)) continue;
             if (o->flags & 0x20) continue;
             uint32_t range = (uint32_t)(int32_t)(int16_t)mc_move_desc(owner->desc)->sight_radius;
             if ((uint32_t)pos_dist_xyz(thing_pos(o), thing_pos(t)) > range) continue;

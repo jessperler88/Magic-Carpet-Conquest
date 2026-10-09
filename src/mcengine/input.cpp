@@ -370,8 +370,8 @@ void player_function_keys() {
         case 0x12:      // E
             if (cheat_gate()) player_queue_command(0x1a, 0);
             break;
-        case 0x13:      // R: restart the level
-            if (!net_or_custom()) {
+        case 0x13:      // R: restart the level (round 12: not in a mode run - it would restart the match)
+            if (!net_or_custom() && !mode_active()) {
                 rec->status |= 0xc;
                 rec->blk.castle = 0;                    // GameState+0x388c + player * 0x801
             }

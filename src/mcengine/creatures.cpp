@@ -7,6 +7,7 @@
 #include "creatures.h"
 #include "level_features.h"   // effect_wizard_init, terrain_rect_height_range, castle_footprint
 #include "mc_math.h"
+#include "mode_rules.h"     // same_side (round 12)
 
 namespace {
 
@@ -350,7 +351,7 @@ void creature_crab_s30_update(Thing *t)   { thing_set_state(t, 0x1f); }
 // back to state 55.
 void skeleton_set_attack_sprite(Thing *t) {
     const Thing *target = thing_at(t->target);
-    if (t->owner == target->owner) {
+    if (same_side(t->owner, target->owner)) {
         thing_set_state(t, 0x37);
         return;
     }
@@ -434,7 +435,7 @@ void skeleton_wander(Thing *t, int base) {
     // nearest castle of another owner anywhere on the map: walk toward it, attack inside
     // sight radius + castle half width
     Thing *castle = nearest_in_list(g_cfg->player_list, t, kFarSq,
-                                    [t](const Thing *p) { return p->type == 2 && p->owner != t->owner; });
+                                    [t](const Thing *p) { return p->type == 2 && !same_side(p->owner, t->owner); });
     if (castle) {
         t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(castle));
         int range = (int16_t)desc_of(t)->sight_radius + (int)castle->ext_x;
@@ -455,7 +456,7 @@ void skeleton_wander(Thing *t, int base) {
         Thing *best = nullptr;
         for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next) {
             Thing *p = thing_at(i);
-            if (p->owner == t->owner) continue;
+            if (same_side(p->owner, t->owner)) continue;
             uint64_t d = dist_sq_xy16(p, t);
             if (d > limit) continue;
             if (p->flags & 0x20) continue;

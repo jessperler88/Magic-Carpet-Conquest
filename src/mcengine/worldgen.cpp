@@ -725,6 +725,87 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
 
 const WorldLayout &worldgen_last_layout() { return s_last; }
 
+// Round 12 (task A): the setup screen's preview (worldgen.h). The steps of worldgen_build up to the rivers, with the
+// same constants (keep them in step: world_gen_test / fe_mode_test compare the seats with a real build), on a scratch
+// world that replaces g_world and the map pointers for the duration of the call.
+bool worldgen_preview(const ModeParams &params, const LevelData &tmpl, WorldPreview *out) {
+    if (!out) return false;
+    const WorldGenSettings s = worldgen_settings(params);
+    const int n = s.size;
+    if (n < MC_WORLD_MIN || n > MC_WORLD_MAX || (n & (n - 1))) return false;
+    // ---- switch to the scratch world ----
+    const World saved_world = g_world;
+    const uint32_t saved_mask = g_world_unit_mask;
+    uint8_t *const saved_type = g_map_type, *const saved_height = g_map_height, *const saved_light = g_map_light;
+    uint8_t *const saved_flags = g_map_flags;
+    uint16_t *const saved_things = g_cell_things;
+    const uint32_t cells = (uint32_t)n * (uint32_t)n;
+    std::vector<uint8_t> maps((size_t)cells * 4, 0);
+    std::vector<uint16_t> things(cells, 0);
+    int shift = 0;
+    while ((1 << shift) < n) shift++;
+    g_world.size = n;
+    g_world.shift = shift;
+    g_world.cell_mask = (uint32_t)n - 1;
+    g_world.units = n * MC_CELL_UNITS;
+    g_world.unit_mask = (uint32_t)g_world.units - 1;
+    g_world.cells = cells;
+    g_world_unit_mask = g_world.unit_mask;
+    g_map_type = maps.data();
+    g_map_height = maps.data() + cells;
+    g_map_light = maps.data() + 2 * (size_t)cells;
+    g_map_flags = maps.data() + 3 * (size_t)cells;
+    g_cell_things = things.data();
+
+    // ---- worldgen_build's height field, seats, plateaus and rivers ----
+    GenMap gen = tmpl.gen;
+    gen.raise = 0;
+    gen.gnarl = 16;
+    gen.river = 20;
+    gen.sourc = 40;
+    const uint32_t seed = mix(params.seed ^ 0x3017d00du);
+    {
+        std::vector<int32_t> field(cells);
+        TerrainWorldGen tg;
+        tg.seed = seed;
+        tg.start_x = (int)(gen.off & 0xff) * (n / 256);
+        tg.start_y = (int)((gen.off >> 8) & 0xff) * (n / 256);
+        tg.raise = (int16_t)(uint16_t)gen.raise;
+        tg.gnarl = (int32_t)((int64_t)(uint16_t)gen.gnarl * s.roughness_pct / 100);
+        tg.coarse_pct = s.continent_pct;
+        terrain_fractal_world(field.data(), tg);
+        symmetrise(field, s.symmetry);
+        terrain_normalise_world(field.data(), s.water_pct);
+    }
+    WorldLayout lay;
+    lay.size = n;
+    lay.symmetry = s.symmetry;
+    Placer P(s, nullptr, mix(seed + 1), lay);
+    choose_seats(P, s.players);
+    flatten_plateaus(P.seats);
+    place_rivers(P, gen);
+
+    out->size = n;
+    out->symmetry = s.symmetry;
+    out->players = s.players;
+    out->height.assign(cells, 0);
+    for (uint32_t i = 0; i < cells; i++)
+        out->height[i] = g_map_flags[i] == 0 ? 0 : (uint8_t)std::max<int>(g_map_height[i], 1);
+    out->seats.clear();
+    for (size_t i = 0; i < P.seats.size(); i++)
+        out->seats.push_back(WorldFeature{WFEAT_SPAWN, (uint8_t)i, (uint16_t)P.seats[i].x, (uint16_t)P.seats[i].y, 0});
+
+    // ---- restore ----
+    g_world = saved_world;
+    g_world_unit_mask = saved_mask;
+    g_map_type = saved_type;
+    g_map_height = saved_height;
+    g_map_light = saved_light;
+    g_map_flags = saved_flags;
+    g_cell_things = saved_things;
+    return true;
+}
+
 int worldgen_apply_woods() {
     if (s_oak.size() != g_world.cells) return 0;
     int n = 0;

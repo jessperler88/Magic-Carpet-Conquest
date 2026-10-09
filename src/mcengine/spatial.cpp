@@ -2,6 +2,7 @@
 // castle_spell_reset_charge_41310, thing_aim_at_43ee0. Translated from the disassembly of carpet.exe.
 #include "spatial.h"
 #include "terrain_paint.h"
+#include "mode_rules.h"     // same_side (round 12): exactly `a == b` outside a mode run with teams
 #include <cstring>
 
 void (*g_hook_thing_drop_mana_ball)(Thing *) = nullptr;
@@ -76,7 +77,7 @@ template <typename F> void area_cells_slot0(Thing *t, F hit) {
         for (int dx = -r; dx <= r; dx++) {
             unsigned cell = world_cell(cx + dx, cy + dy);
             walk_cell(cell, [&](Thing *o) {
-                if (o->owner == t->owner) return false;
+                if (same_side(o->owner, t->owner)) return false;
                 if (!thing_collide(t, o)) return false;
                 if (!(o->prop_flags & 1)) return false;
                 if (!(o->flags & 8)) return false;
@@ -94,11 +95,11 @@ template <typename F> void area_cells_slot0(Thing *t, F hit) {
 // thing_find_collision_105f0
 Thing *thing_find_collision(Thing *t) {
     return spiral_find(t, [&](Thing *o) {
-        return (o->flags & 8) && filter_pass(t, o) && t->owner != o->owner && thing_collide(t, o);
+        return (o->flags & 8) && filter_pass(t, o) && !same_side(t->owner, o->owner) && thing_collide(t, o);
     });
 }
 
-// thing_find_collision_other_owner_10980
+// thing_find_collision_other_owner_10980 (only caller: the mana ball merge - balls own themselves, kept as is)
 Thing *thing_find_collision_other_owner(Thing *t) {
     return spiral_find(t, [&](Thing *o) {
         return filter_pass(t, o) && t->owner != o->owner && thing_collide(t, o);
@@ -110,8 +111,8 @@ Thing *thing_find_mana_near(Thing *t) {
     return spiral_find(t, [&](Thing *o) {
         if (!(o->flags & 8) || o->cls != 10) return false;
         if (o->type != 0x27 && o->type != 0x28 && o->type != 0x2d) return false;
-        if (t->owner == o->owner) return false;
-        if ((int)(int16_t)t->owner == (int)o->mana_owner) return false;
+        if (same_side(t->owner, o->owner)) return false;
+        if (same_side((int)(int16_t)t->owner, (int)o->mana_owner)) return false;     // round 12: no ally's mana
         return thing_collide(t, o) != 0;
     });
 }
@@ -147,7 +148,7 @@ void thing_area_damage(Thing *t, int slot_in, unsigned amount_in) {
     uint32_t amount = amount_in & 0xffff;
     if (slot == 0) {
         for_each_castle([&](Thing *p) {
-            if (p->owner != t->owner && thing_collide(t, p)) slot_hit(p, 0, amount, t->owner);
+            if (!same_side(p->owner, t->owner) && thing_collide(t, p)) slot_hit(p, 0, amount, t->owner);
         });
         area_cells_slot0(t, [&](Thing *o) { slot_hit(o, 0, amount, t->owner); });
         return;
@@ -162,7 +163,7 @@ void thing_area_damage(Thing *t, int slot_in, unsigned amount_in) {
         for (int dx = -r; dx <= r; dx++) {
             unsigned cell = world_cell(cx + dx, cy + dy);
             walk_cell(cell, [&](Thing *o) {
-                if (o->owner == t->owner) return false;
+                if (same_side(o->owner, t->owner)) return false;
                 if (o->cls == 0) return false;
                 if (!(o->flags & 8)) return false;
                 if (!(o->prop_flags & bit)) return false;
@@ -179,7 +180,7 @@ void thing_area_damage_fire(Thing *t, int slot, unsigned amount_in) {
     if ((slot & 0xff) != 0) return;
     uint32_t amount = amount_in & 0xffff;
     for_each_castle([&](Thing *p) {
-        if (p->owner != t->owner && thing_collide(t, p)) slot_hit(p, 0, amount, t->owner);
+        if (!same_side(p->owner, t->owner) && thing_collide(t, p)) slot_hit(p, 0, amount, t->owner);
     });
     area_cells_slot0(t, [&](Thing *o) {
         slot_hit(o, 0, (o->cls == 2 && o->type == 0) ? amount / 10 : amount, t->owner);
@@ -193,7 +194,7 @@ void thing_area_damage_quake(Thing *t, int slot, unsigned amount_in) {
     for_each_castle([&](Thing *p) {
         if (!thing_collide(t, p)) return;
         p->duration = 0x1e;
-        if (p->owner != t->owner) slot_hit(p, 0, amount, t->owner);
+        if (!same_side(p->owner, t->owner)) slot_hit(p, 0, amount, t->owner);
     });
     area_cells_slot0(t, [&](Thing *o) { slot_hit(o, 0, amount, t->owner); });
 }
@@ -214,7 +215,7 @@ void thing_try_damage(const Thing *attacker, Thing *victim, int slot_in, unsigne
     if (victim->cls == 0 || !(victim->flags & 8)) return;
     if (!(victim->prop_flags & (uint16_t)(1u << (slot & 0x1f)))) return;
     if (!filter_pass(attacker, victim)) return;
-    if (attacker->owner == victim->owner) return;
+    if (same_side(attacker->owner, victim->owner)) return;
     if (!thing_collide(attacker, victim)) return;
     thing_add_pending_damage(attacker, victim, (int)slot, amount);
 }
@@ -223,7 +224,7 @@ void thing_try_damage(const Thing *attacker, Thing *victim, int slot_in, unsigne
 void cell_kill_things(unsigned cell, unsigned owner_in) {
     uint16_t owner = (uint16_t)owner_in;
     walk_cell(cell & (g_world.cells - 1), [&](Thing *o) {
-        if ((int)(int16_t)o->owner == (int)owner) return false;
+        if (same_side((int)(int16_t)o->owner, (int)owner)) return false;
         if (o->cls == 2) {
             thing_mark_delete(o);
         } else if (o->cls == 5) {

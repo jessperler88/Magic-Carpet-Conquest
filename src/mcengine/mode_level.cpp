@@ -15,6 +15,7 @@
 #include "gen/player_tables.h"
 #include "mcfile.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -191,21 +192,239 @@ void mode_stop_run() {
 
 bool mode_run_active() { return s_running && mode_active(); }
 
-bool mode_start_net_run(const char *game_dir, uint32_t mode, const ModeParams &params, bool *differs) {
+ModeParams mode_net_session_params(const ModeParams &params, int session_players) {
+    ModeParams m = params;
+    m.humans = (uint32_t)(session_players < 1 ? 1 : session_players > 8 ? 8 : session_players);
+    if (m.humans + m.bots > 8) m.bots = 8 - m.humans;
+    return m;
+}
+
+bool mode_net_agree(const char *game_dir, uint32_t mode, const ModeParams &params, NetGameRules *agreed, bool *differs) {
     if (differs) *differs = false;
-    if (!net_joined()) return false;
-    ModeParams mine = params;
-    mine.humans = (uint32_t)net_player_count();
-    if (mine.humans + mine.bots > 8) mine.bots = mine.humans < 8 ? 8 - mine.humans : 0;
+    if (!net_joined() || !agreed) return false;
     // this peer's run first, so its rules (the pool of this world) are what it proposes
-    if (!mode_start_run(game_dir, mode, mine)) return false;
-    const NetGameRules agreed = net_agree_rules(net_local_rules(), differs);
+    if (!mode_start_run(game_dir, mode, mode_net_session_params(params, net_player_count()))) return false;
+    *agreed = net_agree_rules(net_local_rules(), differs);
     mode_stop_run();                                 // releases the forced rules: the host's are applied next
-    if (agreed.mode == GAME_MODE_ORIGINAL || agreed.mode >= GAME_MODE_COUNT) return false;
-    net_apply_rules(agreed);
-    g_cfg->flags |= 0x10;
-    if (!mode_start_run(game_dir, agreed.mode, agreed.mode_params)) { net_release_rules(); return false; }
     return true;
+}
+
+bool mode_start_agreed_net_run(const char *game_dir, const NetGameRules &agreed) {
+    if (!net_joined()) return false;
+    if (agreed.mode == GAME_MODE_ORIGINAL || agreed.mode >= GAME_MODE_COUNT) return false;
+    // every peer derives the same session params from the host's (the lobby's proposal says humans = 1)
+    NetGameRules r = agreed;
+    r.mode_params = mode_net_session_params(agreed.mode_params, net_player_count());
+    net_apply_rules(r);
+    g_cfg->flags |= 0x10;
+    if (!mode_start_run(game_dir, r.mode, r.mode_params)) { net_release_rules(); return false; }
+    return true;
+}
+
+bool mode_start_net_run(const char *game_dir, uint32_t mode, const ModeParams &params, bool *differs) {
+    NetGameRules agreed{};
+    if (!mode_net_agree(game_dir, mode, params, &agreed, differs)) return false;
+    return mode_start_agreed_net_run(game_dir, agreed);
+}
+
+// ---- the campaign's progress around a mode run (mode_level.h) ------------------------------------------------------
+namespace {
+constexpr size_t kCampaignSpells = 0x3bd6, kCampaignOptions = 0x2195;   // GameState offsets the .gam saves
+struct CampaignCarry {
+    bool     saved = false;
+    uint16_t level = 0;
+    uint8_t  spells[0x18] = {};
+    uint8_t  options[0xc] = {};
+};
+CampaignCarry s_carry;
+uint8_t *state_at(size_t off) { return reinterpret_cast<uint8_t *>(g_state) + off; }
+}
+
+void mode_campaign_save() {
+    if (s_carry.saved) return;
+    s_carry.saved = true;
+    s_carry.level = g_cfg->level;
+    std::memcpy(s_carry.spells, state_at(kCampaignSpells), sizeof s_carry.spells);
+    std::memcpy(s_carry.options, state_at(kCampaignOptions), sizeof s_carry.options);
+}
+
+void mode_campaign_restore() {
+    if (!s_carry.saved) return;
+    g_cfg->level = s_carry.level;
+    std::memcpy(state_at(kCampaignSpells), s_carry.spells, sizeof s_carry.spells);
+    std::memcpy(state_at(kCampaignOptions), s_carry.options, sizeof s_carry.options);
+    s_carry = CampaignCarry{};
+}
+
+bool mode_campaign_saved() { return s_carry.saved; }
+
+ModeState mode_result_snapshot(int local_record, bool forfeit) {
+    ModeState s = g_mode;
+    if (forfeit && local_record >= 0 && local_record < 8) {
+        ModePlayer &p = s.players[local_record];
+        if (!(p.flags & MODE_PLAYER_ELIMINATED)) { p.flags |= MODE_PLAYER_ELIMINATED; p.eliminated_tick = s.tick; }
+        p.flags &= ~MODE_PLAYER_DESECRATING;
+        if (s.match_state != MATCH_OVER) {
+            s.match_state = MATCH_OVER;
+            s.match_end_tick = s.tick;
+            s.end_reason = MATCH_END_NONE;      // no winner: the match was left
+            s.winner_side = 0;
+        }
+    }
+    return s;
+}
+
+// ---- match-rule options (mode_level.h) -------------------------------------------------------------------------
+namespace {
+std::string norm_key(const std::string &k) {
+    std::string s = k;
+    while (!s.empty() && s[0] == '-') s.erase(0, 1);
+    for (char &c : s) { if (c == '_') c = '-'; else if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a'); }
+    return s;
+}
+bool to_uint(const std::string &v, unsigned long *out) {
+    if (v.empty()) return false;
+    char *end = nullptr;
+    const unsigned long x = std::strtoul(v.c_str(), &end, 10);
+    if (!end || *end || v[0] == '-') return false;
+    *out = x;
+    return true;
+}
+bool ranged(const std::string &key, const std::string &v, unsigned long lo, unsigned long hi, uint8_t *dst, std::string *err) {
+    unsigned long x = 0;
+    if (!to_uint(v, &x) || x < lo || x > hi) {
+        if (err) *err = "--" + key + " takes " + std::to_string(lo) + ".." + std::to_string(hi) + " (got " + v + ")";
+        return false;
+    }
+    *dst = (uint8_t)x;
+    return true;
+}
+bool parse_teams(const std::string &v0, uint8_t team[8], std::string *err) {
+    std::string v = v0;
+    for (char &c : v) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    uint8_t t[8] = {};
+    auto bad = [&](const char *why) { if (err) *err = std::string("--teams ") + v0 + ": " + why +
+        " (1,1,2,2 per record, 2v2 / 1v3 / 2v2v2v2 team sizes, or ffa)"; return false; };
+    if (v == "ffa" || v == "none") {
+        // every record its own side
+    } else if (v.find('v') != std::string::npos) {
+        int rec = 0, id = 0;
+        size_t p = 0;
+        while (p <= v.size()) {
+            const size_t q = v.find('v', p);
+            const std::string part = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            unsigned long n = 0;
+            if (!to_uint(part, &n) || n < 1 || n > 8) return bad("a team size is 1..8");
+            id++;
+            for (unsigned long k = 0; k < n; k++) {
+                if (rec >= 8) return bad("more than 8 records");
+                t[rec++] = (uint8_t)id;
+            }
+            if (q == std::string::npos) break;
+            p = q + 1;
+        }
+        if (id < 2) return bad("at least two teams");
+    } else {
+        int rec = 0;
+        size_t p = 0;
+        while (p <= v.size()) {
+            const size_t q = v.find(',', p);
+            const std::string part = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            unsigned long n = 0;
+            if (!to_uint(part, &n) || n > 8) return bad("a team id is 0..8");
+            if (rec >= 8) return bad("more than 8 records");
+            t[rec++] = (uint8_t)n;
+            if (q == std::string::npos) break;
+            p = q + 1;
+        }
+    }
+    std::memcpy(team, t, 8);
+    return true;
+}
+} // namespace
+
+bool mode_match_option_known(const std::string &key) {
+    const std::string k = norm_key(key);
+    return k == "teams" || k == "win" || k == "mana-pct" || k == "hold" || k == "time" || k == "respawn" ||
+           k == "respawn-level" || k == "desecrate" || k == "bot-skill";
+}
+
+bool mode_match_option(const std::string &key, const std::string &value, MatchRules *m, std::string *err) {
+    const std::string k = norm_key(key);
+    if (k == "teams") return parse_teams(value, m->team, err);
+    if (k == "win") {
+        std::string v = value;
+        for (char &c : v) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (v == "none") { m->win = MATCH_WIN_NONE; return true; }
+        uint8_t bits = 0;
+        size_t p = 0;
+        while (p <= v.size()) {
+            const size_t q = v.find_first_of(",+", p);
+            const std::string w = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            if (w == "elim" || w == "elimination") bits |= MATCH_WIN_ELIMINATION;
+            else if (w == "mana") bits |= MATCH_WIN_MANA;
+            else if (w == "timer" || w == "time") bits |= MATCH_WIN_TIMER;
+            else { if (err) *err = "--win takes elim,mana,timer (any of them) or none (got " + value + ")"; return false; }
+            if (q == std::string::npos) break;
+            p = q + 1;
+        }
+        m->win = bits;
+        return true;
+    }
+    if (k == "mana-pct") return ranged(k, value, 1, 100, &m->mana_pct, err);
+    if (k == "hold") return ranged(k, value, 1, 255, &m->mana_hold_s, err);
+    if (k == "time") return ranged(k, value, 1, 255, &m->time_limit_min, err);
+    if (k == "respawn") return ranged(k, value, 1, 255, &m->respawn_s, err);
+    if (k == "respawn-level") return ranged(k, value, 1, 255, &m->respawn_level_s, err);
+    if (k == "desecrate") {
+        if (value == "off" || value == "OFF" || value == "none") { m->desecrate_s = 0xff; return true; }
+        return ranged(k, value, 1, 254, &m->desecrate_s, err);
+    }
+    if (k == "bot-skill") return ranged(k, value, 1, 4, &m->bot_skill, err);
+    if (err) *err = "unknown match option --" + k;
+    return false;
+}
+
+bool mode_match_rules_finish(MatchRules *m, std::string *err) {
+    if (m->win & MATCH_WIN_NONE) return true;
+    if (m->time_limit_min > 0) {
+        if (m->win == 0) m->win = MATCH_WIN_ELIMINATION | MATCH_WIN_MANA;
+        m->win |= MATCH_WIN_TIMER;
+    } else if (m->win & MATCH_WIN_TIMER) {
+        if (err) *err = "--win timer needs a time limit (--time M)";
+        return false;
+    }
+    return true;
+}
+
+std::string mode_match_rules_describe(const MatchRules &m) {
+    char buf[256];
+    std::string s = "win ";
+    if (m.win & MATCH_WIN_NONE) s += "none";
+    else {
+        const uint8_t w = m.win ? m.win : (uint8_t)(MATCH_WIN_ELIMINATION | MATCH_WIN_MANA);
+        std::string b;
+        if (w & MATCH_WIN_ELIMINATION) b += "elim";
+        if (w & MATCH_WIN_MANA) b += b.empty() ? "mana" : "+mana";
+        if (w & MATCH_WIN_TIMER) b += b.empty() ? "timer" : "+timer";
+        s += b.empty() ? "?" : b;
+    }
+    std::snprintf(buf, sizeof buf, ", mana %d%% for %d s, ", m.mana_pct ? m.mana_pct : 75, m.mana_hold_s ? m.mana_hold_s : 30);
+    s += buf;
+    s += m.time_limit_min ? "time " + std::to_string(m.time_limit_min) + " min" : std::string("no time limit");
+    std::snprintf(buf, sizeof buf, ", respawn %d+%d/level s, desecrate ", m.respawn_s ? m.respawn_s : 10,
+                  m.respawn_level_s ? m.respawn_level_s : 5);
+    s += buf;
+    if (m.desecrate_s == 0xff) s += "off";
+    else s += std::to_string(m.desecrate_s ? m.desecrate_s : 25) + " s";
+    s += ", bot skill " + std::to_string(m.bot_skill ? m.bot_skill : 0) + (m.bot_skill ? "" : " (template)");
+    bool teams = false;
+    for (int i = 0; i < 8; i++) teams |= m.team[i] != 0;
+    if (teams) {
+        s += ", teams ";
+        for (int i = 0; i < 8; i++) s += (i ? "," : "") + std::to_string(m.team[i]);
+    } else s += ", free for all";
+    return s;
 }
 
 bool mode_start_run_for_state(const char *game_dir, const char *state_path) {

@@ -44,6 +44,10 @@ int ai_goal_attack_type3(Thing *t);             // ai_goal_attack_type3_13440
 int ai_goal_creature_near_rival(Thing *t);      // ai_goal_creature_near_rival_13600 (no caller in retail)
 int ai_goal_hunt_creature(Thing *t);            // ai_goal_hunt_creature_13770
 int ai_goal_default(Thing *t);                  // ai_goal_default_13a20 (sets mode 0xb or 0xc itself)
+// Port (round 12, mode runs only; 0 otherwise): a visible live enemy wizard (returns 2, mode 8) or else a live
+// creature of another side (returns 1, mode 0xd) within 24 cells of the own castle -> target; between the upgrade
+// and the castle attack goals.
+int ai_goal_defend_castle(Thing *t);
 int ai_set_mode(Thing *t, int mode);            // the 14 setters ai_set_mode0_13880 .. ai_set_mode11_13a00 (always 1)
 
 // ---- spells --------------------------------------------------------------------------------------
