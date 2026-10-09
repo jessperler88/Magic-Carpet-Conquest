@@ -159,7 +159,7 @@ use the same frame-stepped phase pattern as the translated screens.
     (shared temp / timing). Neither involves these files.
 
 ## Screenshots (looked at)
-`%TEMP%\mc_fe_mode_test\` (`C:\Users\jessp\AppData\Local\Temp\mc_fe_mode_test\`), 640x400 pixel-doubled:
+`%TEMP%\mc_fe_mode_test\`, 640x400 pixel-doubled:
 - `fe_mode_menu_faithful.png`, `fe_mode_menu_urn.png`, `fe_mode_menu_urn_hover.png`
 - `fe_mode_setup_first.png`, `fe_mode_setup_random.png`, `fe_mode_setup_seed12345.png`, `fe_mode_setup_seed777.png`
   (two seeds, different islands), `fe_mode_setup_hover_water.png` (hint line)
