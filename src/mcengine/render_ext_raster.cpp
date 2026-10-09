@@ -66,7 +66,8 @@ void fill_rows(const ExtBand &band, const ExtSky &sky, const ExtTri &t, const Tr
     const uint32_t colour = t.colour;
     const double uv_hi = (double)t.uv_max;
     constexpr bool uses_tex = MODE != 4;
-    constexpr bool uses_shade = MODE == 4 || MODE == 5 || MODE == 26;
+    constexpr bool uses_shade = MODE == 4 || MODE == 5 || MODE == 26 || MODE == 27;
+    constexpr bool uses_sky = HAZE || MODE == 27;       // 27: water over the sky texel behind the pixel
     (void)blend; (void)tex; (void)colour; (void)uv_hi;
     for (int y = ya; y < yb; ++y) {
         const double xa = edge_x(S.T, S.B, y);
@@ -86,8 +87,10 @@ void fill_rows(const ExtBand &band, const ExtSky &sky, const ExtTri &t, const Tr
         if (uses_shade) span_attr(S.s0 + S.ds_dx * dx + S.ds_dy * dy, S.ds_dx, n, 0.0, 63.0 * 65536.0, s, ds);
         if (HAZE) span_attr(S.h0 + S.dh_dx * dx + S.dh_dy * dy, S.dh_dx, n, 0.0, 65536.0, h, dh);
         uint8_t *p = band.dest + (ptrdiff_t)y * band.pitch + x0;
+        const uint8_t *behind = MODE == 26 && band.refl ? band.refl + (ptrdiff_t)y * band.pitch + x0 : p;
+        (void)behind;
         int32_t su = 0, sv = 0;
-        if (HAZE) { su = sky.u0 + x0 * sky.dux + y * sky.duy; sv = sky.v0 + x0 * sky.dvx + y * sky.dvy; }
+        if (uses_sky) { su = sky.u0 + x0 * sky.dux + y * sky.duy; sv = sky.v0 + x0 * sky.dvx + y * sky.dvy; }
         const int32_t *bay = kBayer[y & 3];
         for (int i = 0; i < n; ++i) {
             uint32_t tx = 0;
@@ -97,15 +100,17 @@ void fill_rows(const ExtBand &band, const ExtSky &sky, const ExtTri &t, const Tr
             if (MODE == 4)       out = shade[(g << 8) | colour];
             else if (MODE == 5)  out = shade[(g << 8) | tx];
             else if (MODE == 7)  out = shade[(colour << 8) | tx];
-            else {                                   // 26: water
+            else {                                   // 26: water over the reflection, 27: over the sky
                 const uint8_t sh = shade[(g << 8) | tx];
-                out = tx < 0xc ? blend[((uint32_t)p[i] << 8) | sh] : sh;
+                const uint32_t back = MODE == 27 ? sky_texel(sky, su, sv) : behind[i];
+                out = tx < 0xc ? blend[(back << 8) | sh] : sh;
             }
             if (HAZE) {
                 const int step = (h * 4 + bay[(x0 + i) & 3]) >> 16;
                 if (step > 0) out = haze_mix(out, sky_texel(sky, su, sv), step);
-                h += dh; su += sky.dux; sv += sky.dvx;
+                h += dh;
             }
+            if (uses_sky) { su += sky.dux; sv += sky.dvx; }
             p[i] = out;
             u += du; v += dv; s += ds;
         }
@@ -153,7 +158,8 @@ void ext_fill_triangle(const ExtBand &band, const ExtSky &sky, const ExtTri &t) 
     case EXT_FILL_FLAT_SHADED: fill_mode<4>(band, sky, t, S, ya, yb); break;
     case EXT_FILL_TEX_FLATLIT: fill_mode<7>(band, sky, t, S, ya, yb); break;
     case EXT_FILL_WATER:       fill_mode<26>(band, sky, t, S, ya, yb); break;
-    default:                   fill_mode<5>(band, sky, t, S, ya, yb); break;
+    case EXT_FILL_WATER_SKY:   fill_mode<27>(band, sky, t, S, ya, yb); break;
+    default:                  fill_mode<5>(band, sky, t, S, ya, yb); break;
     }
 }
 

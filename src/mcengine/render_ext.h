@@ -21,6 +21,7 @@ enum : uint8_t {
     EXT_FILL_TEX_GOURAUD = 5,     // SHADE[g][texel]
     EXT_FILL_TEX_FLATLIT = 7,     // SHADE[colour][texel]       (flat-shaded textures, second surface on)
     EXT_FILL_WATER       = 26,    // translucent water over the reflection
+    EXT_FILL_WATER_SKY   = 27,    // port: translucent water over the sky (water above sea level, render_ext.cpp)
 };
 
 struct ExtTri {
@@ -61,6 +62,9 @@ struct ExtBand {
     uint8_t *dest;
     int      pitch, width, height;
     int      y0, y1;
+    // Water (EXT_FILL_WATER) blends with this image (same pitch as dest: the sky + the mirrored landscape drawn before
+    // the real one) instead of the pixel already in dest; null = with dest (the original: whatever was drawn before).
+    const uint8_t *refl = nullptr;
 };
 
 // Mix tables for the haze: g_ext_mix[k - 1][(p << 8) | sky] = palette colour nearest to

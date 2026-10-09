@@ -590,6 +590,60 @@ int main(int argc, char **argv) {
     } else {
         std::printf("world art: Hidden Worlds not installed, part 9 skipped\n");
     }
+
+    // 11. (opt-in, a look-at aid) MC_WR_SEED=S [MC_WR_SIZE=N MC_WR_BOTS=B]: that generated world, up to 6 inland lakes
+    //     (water at heights 8..118, 40 cells apart) each from three views at the play defaults' dd 255 / lod 1 with the
+    //     reflection on -> w_lake<k>_<view>.ppm (MC_WR_SEA=1: sea-level water). Nothing is checked.
+    if (const char *seed_env = std::getenv("MC_WR_SEED")) {
+        mode_level_register();
+        ModeParams mp;
+        mp.seed = (uint32_t)std::strtoul(seed_env, nullptr, 10);
+        mp.world_size = std::getenv("MC_WR_SIZE") ? (uint32_t)std::atoi(std::getenv("MC_WR_SIZE")) : 1024;
+        mp.bots = std::getenv("MC_WR_BOTS") ? (uint32_t)std::atoi(std::getenv("MC_WR_BOTS")) : 3;
+        mp.humans = 1;
+        g_cfg->flags = 0; g_cfg->paused = 0;
+        if (mode_start_run(game_dir, GAME_MODE_CONQUEST, mp) && sim_load_level(MODE_LEVEL_INDEX)) {
+            auto water = [](uint32_t c) { return g_map_type[c] < 164 && g_tex_prop_water[g_map_type[c]] != 0; };
+            const bool sea_only = std::getenv("MC_WR_SEA") != nullptr;      // MC_WR_SEA=1: sea-level water instead
+            std::vector<uint32_t> lakes;
+            for (uint32_t cell = 0; cell < g_world.cells && lakes.size() < 6; cell += 3) {
+                const int h = g_map_height[cell];
+                if (!water(cell) || (sea_only ? h != 0 : (h < 8 || h > 118))) continue;
+                int n = 0;
+                const int x0 = world_cell_x(cell), y0 = world_cell_y(cell);
+                for (int dy = -2; dy <= 2; dy++)
+                    for (int dx = -2; dx <= 2; dx++) n += water(world_cell(world_wrap_cell(x0 + dx), world_wrap_cell(y0 + dy)));
+                if (n < 25) continue;
+                bool apart = true;
+                for (uint32_t o : lakes) {
+                    const int ddx = world_signed((x0 - (int)world_cell_x(o)) * 256) / 256, ddy = world_signed((y0 - (int)world_cell_y(o)) * 256) / 256;
+                    if (ddx * ddx + ddy * ddy < 40 * 40) apart = false;
+                }
+                if (apart) lakes.push_back(cell);
+            }
+            g_settings.fog_start_pct = 100;
+            const uint8_t keep_second = g_state->opt_second_surface;
+            g_state->opt_second_surface = 1;
+            for (size_t k = 0; k < lakes.size(); k++) {
+                const int x0 = world_cell_x(lakes[k]), y0 = world_cell_y(lakes[k]), h = g_map_height[lakes[k]];
+                struct View { int back, above, pitch; } views[3] = {{1, 0xc0, 110}, {6, 0x200, 60}, {16, 0x400, 30}};
+                for (int v = 0; v < 3; v++) {
+                    Camera wc{};
+                    wc.cam_x = world_wrap_cell(x0) * 256 + 128;
+                    wc.cam_y = world_wrap_cell(y0 + views[v].back) * 256 + 128;
+                    wc.cam_z = (std::min)(h * 0x20 + views[v].above, 0xfc0);
+                    wc.pitch = views[v].pitch; wc.zoom = 0x80;
+                    Img img = render_ext_frame_wh(wc, 255, 1, 1280, 720);
+                    write_ppm("w_lake" + std::to_string(k) + "_" + std::to_string(v) + ".ppm", img.data(), 1280, 720);
+                }
+                std::printf("lake %zu: cell %d,%d height %d\n", k, x0, y0, h);
+            }
+            g_state->opt_second_surface = keep_second;
+        }
+        mode_stop_run();
+        g_settings = defaults;
+        world_set_size(256);
+    }
     std::printf("%s\n", g_fail ? "FAILED" : "PASS");
     return g_fail ? 1 : 0;
 }
