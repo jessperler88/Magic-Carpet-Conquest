@@ -3,6 +3,7 @@
 #include "input.h"
 #include "settings.h"
 #include "player.h"
+#include "mode.h"
 #include "mcfile.h"
 #include "gen/input_tables.h"
 #include <cstdio>
@@ -552,9 +553,22 @@ static void flight_fire(const Thing *t, int slot, uint16_t *click, uint16_t held
     }
     const Thing *spell = spell_of_slot(t, slot);
     if (spell->spell_flags == 1) {
+        // port (user, 2026-10-09): in a mode run a held button repeats the basic fireball (spell 0) every
+        // kFireballHoldTicks ticks (3.125 a second at 25 Hz; the mini fireball, the original's rapid fire, repeats every 3)
+        constexpr int kFireballHoldTicks = 8;
+        static int s_held_ticks[2];
+        int &n = s_held_ticks[bit == 0x20];
         if (*click != 0) {
             player_queue_command(6, bit);
             *click = 0;
+            n = 0;
+        } else if (held != 0 && spell->type == 0 && mode_active()) {
+            if (++n >= kFireballHoldTicks) {
+                player_queue_command(6, bit);
+                n = 0;
+            }
+        } else {
+            n = 0;
         }
         return;
     }

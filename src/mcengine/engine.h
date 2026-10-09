@@ -29,7 +29,8 @@ const char *engine_game_dir();
 // through worldgen.h g_hook_level_art), with the base data set active and Hidden Worlds installed: the texture
 // tiles of every corner-class tuple containing class 6 come from Hidden Worlds' blk1 atlas (its snow; the world's
 // classes are Hidden Worlds' there, terrain_build_passes(gen, true)), and Hidden Worlds' broadleaf tree (tmaps1-0
-// chunk 140) becomes port sprite MC_SPRITE_OAK for SpriteDesc MC_SPRITE_DESC_OAK - both remapped to the base
+// chunk 140) becomes port sprite MC_SPRITE_OAK for SpriteDesc MC_SPRITE_DESC_OAK and its burnt one (chunk 299)
+// MC_SPRITE_OAK_BURNT for MC_SPRITE_DESC_OAK_BURNT - all remapped to the base
 // palette (nearest colour). A patched copy of the atlas is shown (the renderers rebuild their caches from the new
 // pointer); off restores the data set's atlas, average colours and the oak's palm fallback. Nothing the
 // simulation reads changes, so peers with and without Hidden Worlds stay in sync.

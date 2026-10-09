@@ -56,6 +56,7 @@ void scenery_tree_s1_update(Thing *t) {
         t->state = 2;
         if (sprite == 0x53)      thing_set_sprite(t, 0xe2);      // thing_set_sprite_small_352d0
         else if (sprite == 0x54) thing_set_sprite(t, 0xe3);
+        else if (sprite == MC_SPRITE_DESC_OAK) thing_set_sprite(t, MC_SPRITE_DESC_OAK_BURNT);   // port: generated woods
     }
     scenery_tree_ground_check(t);
 }

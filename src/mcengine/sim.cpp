@@ -30,7 +30,7 @@ const char *sim_game_dir() { return s_game_dir.c_str(); }
 // sprite extents sprite_table_init_sizes_4bd10 completes from tmaps (from the exe table again) and the
 // castle footprints (building.*).
 static void sim_world_set_changed(int /*set*/) {
-    std::memcpy(g_sprite_desc, g_sprite_desc_data, sizeof g_sprite_desc);
+    std::memcpy(g_sprite_desc, g_sprite_desc_data, sizeof g_sprite_desc_data);
     sprite_table_init_sizes(s_game_dir.c_str());
     level_features_load_data(s_game_dir.c_str());
 }

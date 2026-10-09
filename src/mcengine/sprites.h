@@ -17,6 +17,7 @@ constexpr int MC_SPRITE_COUNT = 0x211;                 // tmaps.dat chunks
 constexpr int MC_SPRITE_PORT_SLOTS = 8;
 constexpr int MC_SPRITE_SLOTS = MC_SPRITE_COUNT + MC_SPRITE_PORT_SLOTS;
 constexpr int MC_SPRITE_OAK = MC_SPRITE_COUNT;          // Hidden Worlds' broadleaf tree (its tmaps1-0 chunk 140)
+constexpr int MC_SPRITE_OAK_BURNT = MC_SPRITE_COUNT + 1; // ... burnt (its tmaps1-0 chunk 299)
 
 // ---- cache state (indexed by sprite number; "group" entries use the group's first sprite) --------
 extern uint8_t *g_sprite_ptr[MC_SPRITE_SLOTS];          // DAT_000b8d3c: loaded chunk (original: pointer to the pool handle), null = not loaded

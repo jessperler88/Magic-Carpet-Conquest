@@ -90,13 +90,14 @@ void fill_texture_table(const uint8_t *atlas, int B) {
     for (int t = 0; t < 256; t++) g_texture_table[t] = atlas + (size_t)(t / cols) * B * 256 + (size_t)(t % cols) * B;
 }
 
-// Hidden Worlds' broadleaf tree: tmaps1-0 chunk 140, pixels remapped (0 stays transparent).
-bool load_oak(const uint8_t remap[256]) {
+// Hidden Worlds' tmaps1-0 chunk CHUNK as port sprite SPRITE, pixels remapped (0 stays transparent): the broadleaf
+// tree (140) and the burnt one (299).
+bool load_hw_sprite(unsigned chunk, unsigned sprite, const uint8_t remap[256]) {
     mc_blob tab{}, dat{};
     if (!mc_read_file(hidden_path("data/tmaps1-0.tab").c_str(), &tab)) return false;
     bool ok = false;
-    if (tab.len >= 141 * 10 && mc_read_file(hidden_path("data/tmaps1-0.dat").c_str(), &dat)) {
-        const uint8_t *e = tab.data + 140 * 10;
+    if (tab.len >= (chunk + 1) * 10 && mc_read_file(hidden_path("data/tmaps1-0.dat").c_str(), &dat)) {
+        const uint8_t *e = tab.data + chunk * 10;
         const uint32_t size = (uint32_t)e[0] | (uint32_t)e[1] << 8 | (uint32_t)e[2] << 16 | (uint32_t)e[3] << 24;
         const uint32_t off = (uint32_t)e[4] | (uint32_t)e[5] << 8 | (uint32_t)e[6] << 16 | (uint32_t)e[7] << 24;
         if (off < dat.len) {
@@ -109,7 +110,7 @@ bool load_oak(const uint8_t remap[256]) {
                 if (6 + w * h <= len) {
                     raw[0] &= 0xfe;                     // never animated
                     for (size_t i = 0; i < w * h; i++) if (raw[6 + i]) raw[6 + i] = remap[raw[6 + i]];
-                    ok = sprite_port_set(MC_SPRITE_OAK, raw, 6 + w * h);
+                    ok = sprite_port_set(sprite, raw, 6 + w * h);
                 }
             }
             std::free(raw);
@@ -136,7 +137,9 @@ void world_art_apply(bool on) {
         }
         s_art = WorldArt{};
         sprite_port_set(MC_SPRITE_OAK, nullptr, 0);
+        sprite_port_set(MC_SPRITE_OAK_BURNT, nullptr, 0);
         g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite = g_sprite_desc[0x53].base_sprite;   // the palm
+        g_sprite_desc[MC_SPRITE_DESC_OAK_BURNT].base_sprite = g_sprite_desc[0xe2].base_sprite;   // the burnt palm
     }
     if (!on || world_set() != 0 || !world_set_hidden_available() || !g_texture_atlas) return;
     uint8_t pal1[768];
@@ -172,9 +175,12 @@ void world_art_apply(bool on) {
     g_texture_atlas = patched;
     fill_texture_table(patched, B);
     texture_average_colours(g_palette6, g_tex_avg_colour());
-    if (load_oak(remap)) g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite = MC_SPRITE_OAK;
-    std::fprintf(stderr, "world art: %d snow tiles%s from Hidden Worlds\n", tiles,
-                 g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite == MC_SPRITE_OAK ? " and the oak" : "");
+    if (load_hw_sprite(140, MC_SPRITE_OAK, remap)) g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite = MC_SPRITE_OAK;
+    if (load_hw_sprite(299, MC_SPRITE_OAK_BURNT, remap))
+        g_sprite_desc[MC_SPRITE_DESC_OAK_BURNT].base_sprite = MC_SPRITE_OAK_BURNT;
+    std::fprintf(stderr, "world art: %d snow tiles%s%s from Hidden Worlds\n", tiles,
+                 g_sprite_desc[MC_SPRITE_DESC_OAK].base_sprite == MC_SPRITE_OAK ? " and the oak" : "",
+                 g_sprite_desc[MC_SPRITE_DESC_OAK_BURNT].base_sprite == MC_SPRITE_OAK_BURNT ? " (and burnt)" : "");
 }
 
 bool engine_load_level(int index) { return sim_load_level(index); }

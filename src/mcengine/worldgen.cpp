@@ -646,11 +646,12 @@ bool worldgen_build(const ModeParams &params, LevelData *level, WorldLayout *out
     // The spells: every seat the same (a symmetric world is only fair with a symmetric start) - the multiplayer
     // standard of levels 50 / 52 / 53 ...: spells 0, 3 and the Castle (0x10) at the start, all 24 allowed. Some
     // templates start seats without the Castle because their map holds castle urns, which a generated world
-    // replaces (round 11 session 3: on template 59 no computer wizard ever built a castle).
+    // replaces (round 11 session 3: on template 59 no computer wizard ever built a castle). Plus the speed-up (2)
+    // (user, 2026-10-09: fireball, possession, speed-up and castle are every wizard's base kit, never in urns).
     for (int p = 0; p < 8; p++) {
         uint8_t *blk = level->player_block[p];
         for (int id = 0; id < 24; id++) {
-            blk[0x10 + id] = (id == 0 || id == 3 || id == 0x10) ? 1 : 0;
+            blk[0x10 + id] = (id == 0 || id == 2 || id == 3 || id == 0x10) ? 1 : 0;
             blk[0x74 + id] = 1;
         }
     }

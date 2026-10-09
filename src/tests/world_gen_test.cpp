@@ -20,6 +20,7 @@
 #include "mode_level.h"
 #include "worldgen.h"
 #include "thing.h"
+#include "scenery.h"
 #include "player.h"
 #include "net.h"
 #include "world.h"
@@ -337,6 +338,29 @@ static void check_scenery() {
     CHECK(urns[1] >= urns[2] && urns[2] > 0 && urns[3] > 0 && spells_ground >= urns[1] + urns[2] + urns[3]);
     CHECK(woods[0] > 0 && woods[1] > 0 && oaks > 50 && palms > 50);
     CHECK(mc_sprite_desc(MC_SPRITE_DESC_OAK)->half_z == mc_sprite_desc(0x53)->half_z);
+    // every wizard, the bots too, starts with the base kit: fireball, speed-up, possession, castle (user, 2026-10-09)
+    int kitted = 0;
+    for (int p = 0; p < 8; p++) {
+        const PlayerRec &rec = g_state->players[p];
+        if (rec.thing == 0) continue;
+        for (int id : {0, 2, 3, 0x10}) CHECK(rec.blk.spell_thing[id] != 0);
+        kitted++;
+    }
+    CHECK(kitted == 7);
+    // a burning oak burns down to the burnt oak (the burnt palm's extents), not the live oak (user, 2026-10-08)
+    CHECK(mc_sprite_desc(MC_SPRITE_DESC_OAK_BURNT)->half_z == mc_sprite_desc(0xe2)->half_z);
+    bool burnt = false;
+    for (int i = 1; i < thing_pool_slots() && !burnt; i++) {
+        Thing *t = thing_at((unsigned)i);
+        if (t->cls != 2 || t->type != 0 || t->state != 0 || t->sprite != MC_SPRITE_DESC_OAK) continue;
+        t->state = 1;
+        t->health = 0x3c;
+        scenery_tree_s1_update(t);
+        CHECK(t->state == 2);
+        CHECK(t->sprite == MC_SPRITE_DESC_OAK_BURNT);
+        burnt = true;
+    }
+    CHECK(burnt);
     CHECK(hmax > 0xc4 && snow > 100 && snow_low * 50 <= snow && cliff > 0);   // (spike smoothing lowers a few after)
     // the urns are pickups (phase 2): the human's wizard flown onto the nearest tier-1 urn owns its spell after it,
     // and the urn stays for the others (user report: "moving into a spell urn doesn't collect it")

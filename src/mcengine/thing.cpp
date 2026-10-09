@@ -391,6 +391,7 @@ bool sprite_table_init_sizes(const char *game_dir) {
     }
     mc_tmap_set_free(&set);
     g_sprite_desc[MC_SPRITE_DESC_OAK] = g_sprite_desc[0x53];    // port: the oak (mc_globals.h)
+    g_sprite_desc[MC_SPRITE_DESC_OAK_BURNT] = g_sprite_desc[0xe2];   // ... and the burnt oak
     return true;
 }
 
