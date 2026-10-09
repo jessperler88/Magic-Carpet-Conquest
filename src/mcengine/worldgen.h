@@ -45,6 +45,7 @@ enum : uint8_t {
     WFEAT_TOWN,                 // a neutral town (effect 0x2d, the original's villager castle)
     WFEAT_CIRCLE,               // a stone circle (grade 1 = holds a trigger area, link = its DisId; 0 = empty)
     WFEAT_URN,                  // a spell urn, a level pickup (grade = tier 1..3, link = spell id)
+    WFEAT_KRAKEN,               // a wild kraken in open water (grade 1)
 };
 enum : uint8_t { WOOD_PALM = 0, WOOD_OAK = 1 };
 enum : uint8_t {               // trigger payloads (data-driven table in worldgen.cpp)

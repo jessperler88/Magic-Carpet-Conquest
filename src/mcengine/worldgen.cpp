@@ -182,6 +182,13 @@ struct Placer {
         const int c = cls_at(x, y);
         return c >= 2 && c <= 5;
     }
+    // open water: sea level (height 0) on the cell and every cell R away (a kraken off the shore)
+    bool deep_water(int x, int y, int r) const {
+        for (int dy = -r; dy <= r; dy += r ? r : 1)
+            for (int dx = -r; dx <= r; dx += r ? r : 1)
+                if (g_map_height[world_cell(x + dx, y + dy)] != 0) return false;
+        return true;
+    }
     bool near_feature(int x, int y, int min_dist) const {
         for (const WorldFeature &f : out.features)
             if (cell_dist(x, y, f.x, f.y) < min_dist) return true;
@@ -581,6 +588,21 @@ void place_features(Placer &P, int players) {
             if (!P.land(orb[i].x, orb[i].y)) continue;
             P.add_extra(2, model, orb[i].x, orb[i].y);
             if (model == 0 && g_map_height[world_cell(orb[i].x, orb[i].y)] >= median) s_oak[world_cell(orb[i].x, orb[i].y)] = 1;
+        }
+    }
+    // Wild krakens (user, 2026-10-09): one per 10 wild creatures, in open water away from the seats (9000 health,
+    // they drag wizards in). Placed last, so they change nothing else of a seed's world.
+    for (int k = 0; k < std::max(wild / 10, wild ? g : 0) / g; k++) {
+        bool ok = false;
+        for (int a = 0; a < 24 && !ok; a++) {
+            if (!P.pick_orbit(50, 250, 16, false, orb, &n, 32)) continue;
+            ok = true;
+            for (int i = 0; i < n && ok; i++) ok = P.deep_water(orb[i].x, orb[i].y, 3);
+        }
+        if (!ok) continue;
+        for (int i = 0; i < n; i++) {
+            P.add_extra(5, 6, orb[i].x, orb[i].y);
+            P.feature(WFEAT_KRAKEN, 1, orb[i].x, orb[i].y);
         }
     }
 }

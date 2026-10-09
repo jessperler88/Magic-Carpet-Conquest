@@ -201,9 +201,10 @@ bool rts_begin(const char *game_dir, const ModeParams &params) {
         int count[16] = {};
         for (const WorldFeature &f : L.features) count[f.kind & 15]++;
         mclog(MCLOG_INFO, "rts: generated world %d cells, symmetry %s, %d seats, %d records%s: %d springs, %d lairs, "
-              "%d trigger areas, %d portal pairs, %d towns, %d groves", L.size, worldgen_symmetry_name(L.symmetry), L.seats,
+              "%d trigger areas, %d portal pairs, %d towns, %d groves, %d krakens", L.size, worldgen_symmetry_name(L.symmetry), L.seats,
               L.records, L.records_dropped ? " (some features dropped: record budget)" : "", count[WFEAT_SPRING],
-              count[WFEAT_LAIR], count[WFEAT_TRIGGER], count[WFEAT_PORTAL] / 2, count[WFEAT_TOWN], count[WFEAT_TREES]);
+              count[WFEAT_LAIR], count[WFEAT_TRIGGER], count[WFEAT_PORTAL] / 2, count[WFEAT_TOWN], count[WFEAT_TREES],
+              count[WFEAT_KRAKEN]);
         for (const WorldFeature &f : L.features)
             if (f.kind == WFEAT_SPAWN) mclog(MCLOG_INFO, "rts: seat %d at cell %d,%d", f.grade, f.x, f.y);
     }

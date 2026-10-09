@@ -338,6 +338,16 @@ static void check_scenery() {
     CHECK(urns[1] >= urns[2] && urns[2] > 0 && urns[3] > 0 && spells_ground >= urns[1] + urns[2] + urns[3]);
     CHECK(woods[0] > 0 && woods[1] > 0 && oaks > 50 && palms > 50);
     CHECK(mc_sprite_desc(MC_SPRITE_DESC_OAK)->half_z == mc_sprite_desc(0x53)->half_z);
+    // wild krakens (user, 2026-10-09): spawned, in open water
+    int krakens = 0, krakens_wet = 0;
+    for (int i = 1; i < thing_pool_slots(); i++) {
+        const Thing *t = thing_at((unsigned)i);
+        if (t->cls != 5 || t->type != 6 || t->state < 0x24 || t->state > 0x28) continue;
+        krakens++;
+        if (g_map_height[world_cell_of(t->x, t->y)] == 0) krakens_wet++;
+    }
+    std::printf("scenery 512: %d krakens (%d on water)\n", krakens, krakens_wet);
+    CHECK(krakens >= 8 && krakens_wet == krakens);
     // every wizard, the bots too, starts with the base kit: fireball, speed-up, possession, castle (user, 2026-10-09)
     int kitted = 0;
     for (int p = 0; p < 8; p++) {
