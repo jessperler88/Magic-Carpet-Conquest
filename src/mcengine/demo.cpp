@@ -115,7 +115,7 @@ bool demo_open(const char *game_dir, int number) {
         DemoExtHeader h{};
         DemoExtRules r{};
         bool ok = std::fread(&h, 1, sizeof h, f) == sizeof h && std::memcmp(h.magic, "MCPX", 4) == 0 &&
-                  (h.version == 1 || h.version == 2 || h.version == 3) &&
+                  h.version >= 1 && h.version <= 4 &&
                   h.thing_slots >= (uint32_t)MC_THING_SLOTS + (h.version == 1 ? 1u : 0u) &&
                   h.thing_slots <= (uint32_t)MC_THING_SLOTS_MAX;
         if (ok && h.version >= 2) {
@@ -123,13 +123,16 @@ bool demo_open(const char *game_dir, int number) {
                  r.possession_range_pct <= 200;
             rules.possession_range_pct = (int)r.possession_range_pct;
         }
-        if (ok && h.version == 3) {                             // round 10: a game-mode run (demo.h)
-            ok = std::fread(&mh, 1, sizeof mh, f) == sizeof mh && mh.mode != GAME_MODE_ORIGINAL &&
-                 mh.mode < GAME_MODE_COUNT && r.mode == mh.mode && mh.record_format == DEMO_RECORD_FORMAT &&
-                 g_hook_demo_mode_start != nullptr;
+        size_t mh_size = 0;
+        if (ok && h.version >= 3) {                             // round 10: a game-mode run (demo.h)
+            mh_size = demo_mode_header_size((int)h.version);
+            uint8_t raw[sizeof mh] = {};
+            ok = std::fread(raw, 1, mh_size, f) == mh_size && demo_mode_header_read(raw, (int)h.version, &mh) &&
+                 mh.mode != GAME_MODE_ORIGINAL && mh.mode < GAME_MODE_COUNT && r.mode == mh.mode &&
+                 mh.record_format == DEMO_RECORD_FORMAT && g_hook_demo_mode_start != nullptr;
             rules.mode = (int)mh.mode;
         }
-        s_hdr_size = sizeof h + (h.version >= 2 ? sizeof r : 0) + (h.version == 3 ? sizeof mh : 0);
+        s_hdr_size = sizeof h + (h.version >= 2 ? sizeof r : 0) + mh_size;
         std::fclose(f);
         if (!ok) {
             std::fprintf(stderr, "movie %d: %s is not a recording this port can play\n", number, path);
@@ -144,7 +147,7 @@ bool demo_open(const char *game_dir, int number) {
     // port: the pool the recording was made with (the original's movies: 1000 slots); demo_load_state
     // sizes the pool when the snapshot loads, demo_close drops the override.
     if (slots != thing_pool_wanted_slots() || s_forced) { thing_pool_force_slots(slots); s_forced = true; }
-    if (s_version == 3) {
+    if (s_version >= 3) {
         // round 10: the recording's mode run (mode_start_run: the mode block, g_hook_level_source); its
         // state comes from the gax snapshot like every other part of the movie
         if (!g_hook_demo_mode_start(game_dir, mh.mode, mh.params)) {
@@ -172,11 +175,11 @@ bool demo_step() {
 }
 
 long demo_packets_read() {
-    if (s_version == 3) return s_rec_read;
+    if (s_version >= 3) return s_rec_read;
     return (long)((s_pos > s_data_off ? s_pos - s_data_off : 0) / sizeof(CmdPacket));
 }
 long demo_packets_total() {
-    if (s_version == 3) return s_rec_total;
+    if (s_version >= 3) return s_rec_total;
     return (long)((s_file.len > s_data_off ? s_file.len - s_data_off : 0) / sizeof(CmdPacket));
 }
 bool demo_extended() { return s_ext; }
@@ -312,7 +315,7 @@ bool demo_load_state(int number) {
         ok = slots == (uint32_t)thing_pool_wanted_slots() && gam.len >= base;
         // round 11: the snapshot's end (+ the v3 tail), then nothing or the world block (demo.h)
         size_t end = base;
-        if (ok && s_version == 3) {
+        if (ok && s_version >= 3) {
             const size_t tail = v3_tail_size(gam.data + base, gam.len - base);
             ok = tail != 0;
             end += tail;
@@ -323,7 +326,7 @@ bool demo_load_state(int number) {
             world = wrld_block_check(gam.data + end, gam.len - end, slots);
             // v3 snapshots of round 10 were read with ">= base": trailing bytes that are no block stay accepted
             if (world) wrld = gam.data + end;
-            else { world = 256; ok = s_version == 3; }
+            else { world = 256; ok = s_version >= 3; }
         }
         // the world size before any coordinate is stored (WCoord wraps at g_world.units)
         if (!world_set_size((int)world)) ok = false;
@@ -341,7 +344,7 @@ bool demo_load_state(int number) {
             std::memcpy(&ti, gam.data + kImage + 4 + i * sizeof(ThingImage), sizeof ti);
             thing_from_image(ti, thing_at((unsigned)(MC_THING_SLOTS + i)), wrld ? &hi[MC_THING_SLOTS + i] : nullptr);
         }
-        if (ok && s_version == 3) ok = load_v3_tail(gam.data + base, gam.len - base);
+        if (ok && s_version >= 3) ok = load_v3_tail(gam.data + base, gam.len - base);
     } else {
         // demo_relink_state_pointers_3dc10 re-points the players' things at their records and rebases
         // the descriptor pointers; the port converts every pointer field to its index form.
@@ -442,7 +445,7 @@ bool demo_save_state(int number) {
             thing_to_image(*thing_at((unsigned)(MC_THING_SLOTS + i)), &ti);
             ok = std::fwrite(&ti, 1, sizeof ti, f) == sizeof ti;
         }
-        if (ok && s_version == 3) {                             // round 10: the mode block + globals (demo.h)
+        if (ok && s_version >= 3) {                             // round 10: the mode block + globals (demo.h)
             const std::vector<uint8_t> tail = save_v3_tail();
             ok = std::fwrite(tail.data(), 1, tail.size(), f) == tail.size();
         }
@@ -504,7 +507,7 @@ static void demo_record_step(CmdPacket *pkt) {
             const bool v3 = mode_active();                      // round 10: a game-mode run (demo.h)
             // round 11: a wide world without a mode is version 2 (version 1 needs an extended pool)
             const bool v2 = !v3 && (!gameplay_rules_faithful(rules) || world_wide());
-            s_version = v3 ? 3 : v2 ? 2 : 1;
+            s_version = v3 ? DEMO_VERSION_MODE : v2 ? 2 : 1;
             DemoExtHeader h{{'M', 'C', 'P', 'X'}, (uint32_t)s_version, (uint32_t)thing_pool_slots(), 0u};
             DemoExtRules r{(uint32_t)rules.possession_range_pct, v3 ? g_mode.mode : 0u, {0, 0}};
             DemoModeHeader mh{g_mode.mode, g_mode.params, DEMO_RECORD_FORMAT, {0, 0}};
@@ -529,7 +532,7 @@ static void demo_record_step(CmdPacket *pkt) {
         std::memcpy(&g_cfg->credits_state[1], &wait, 4);
     }
     if (handle_get() == 0 || !s_out) return;
-    if (s_version == 3) {
+    if (s_version >= 3) {
         // round 10: v3 record = packet + u16 blob length + the player's order blob (demo.h)
         static uint8_t blob[DEMO_ORDER_BLOB_MAX];
         size_t n = g_hook_demo_order_out ? g_hook_demo_order_out(index, blob, sizeof blob) : 0;
@@ -565,7 +568,7 @@ void demo_record_playback_step(CmdPacket *pkt) {
         }
         handle_set(1);
         s_rec_read = 0;
-        s_rec_total = s_version == 3 ? count_v3_records(s_file.data, s_file.len, s_data_off) : 0;
+        s_rec_total = s_version >= 3 ? count_v3_records(s_file.data, s_file.len, s_data_off) : 0;
         demo_load_state((int16_t)g_cfg->movie);
         demo_load_terrain((int16_t)g_cfg->movie);
         if (g_hook_demo_textures_reload) g_hook_demo_textures_reload();     // texture_load_needed_4c1a0
@@ -578,7 +581,7 @@ void demo_record_playback_step(CmdPacket *pkt) {
         pkt->cmd = 0;
     };
     if (pkt->cmd == 2) { stop(); return; }
-    if (s_version == 3) {
+    if (s_version >= 3) {
         // round 10: v3 record (demo.h); a truncated record ends the movie like a short read
         uint8_t len[2] = {0, 0};
         const bool ok = movie_read(pkt, sizeof *pkt) == sizeof *pkt && movie_read(len, 2) == 2;

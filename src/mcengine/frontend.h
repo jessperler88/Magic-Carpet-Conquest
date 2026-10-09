@@ -16,6 +16,8 @@ enum FeResult {
     // ---- additions by task B ----
     FE_START_DEMO = 3,   // the main menu's attract "demo level": Config.flags |= 0x24, play movie *level_out
                          // (Config.movie = 0) from its snapshot; afterwards come back with fe_frame (state 2)
+    // ---- round 12 (fe_mode.h) ----
+    FE_START_MODE = 4,   // the Conquest setup screen's "Start": an offline mode run with fe_mode_params()
 };
 
 // fe_init_state_51ed0 + the front-end resource loading. `first_state` = the DAT_0012ed2e screen to

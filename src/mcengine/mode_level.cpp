@@ -9,6 +9,8 @@
 #include "ai_wizard.h"
 #include "terrain_paint.h"
 #include "worldgen.h"
+#include "mode_rules.h"
+#include "mode_bots.h"
 #include "net.h"
 #include "gen/player_tables.h"
 #include "mcfile.h"
@@ -87,6 +89,9 @@ void level_start() {
             }
         }
     }
+    // round 12: the match rules (sides, seats) and the bots' skill (mode_rules.h, mode_bots.h)
+    mode_rules_level_start();
+    mode_bots_level_start();
 }
 
 // g_hook_level_world (worldgen.h): the level start of a mode level with a generated world builds it instead of
@@ -165,6 +170,7 @@ void mode_level_register() {
     g_hook_demo_sim_globals_get = sim_globals_get;
     g_hook_demo_sim_globals_set = sim_globals_set;
     g_hook_mode_checksum_globals = checksum_globals;
+    g_hook_mode_match_tick = mode_rules_tick;           // round 12 (mode_rules.h)
 }
 
 bool mode_start_run(const char *game_dir, uint32_t mode, const ModeParams &params) {
@@ -213,11 +219,15 @@ bool mode_start_run_for_state(const char *game_dir, const char *state_path) {
             const uint8_t *c = f.data + off;
             const size_t len = get32(c + 4);
             if (off + 8 + len > f.len) break;
-            if (!std::memcmp(c, "MODE", 4) && len == mode_serialised_size() && get32(c + 8) == MODE_STATE_VERSION) {
-                ModeState m;
-                std::memcpy(&m, c + 12, sizeof m);
-                if (m.mode != GAME_MODE_ORIGINAL && m.mode < GAME_MODE_COUNT)
-                    ok = mode_start_run(game_dir, m.mode, m.params);
+            if (!std::memcmp(c, "MODE", 4)) {
+                // mode_deserialise reads both versions; g_mode is replaced by the state load right after anyway
+                const ModeState keep = g_mode;
+                if (mode_deserialise(c + 8, len)) {
+                    const ModeState m = g_mode;
+                    g_mode = keep;
+                    if (m.mode != GAME_MODE_ORIGINAL && m.mode < GAME_MODE_COUNT)
+                        ok = mode_start_run(game_dir, m.mode, m.params);
+                }
                 break;
             }
             off += 8 + len;

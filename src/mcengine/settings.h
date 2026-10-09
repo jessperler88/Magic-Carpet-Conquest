@@ -86,6 +86,11 @@ struct PortSettings {
     // <save dir>/desync_<exchange>_p<player>.mcs (savestate format, ~850 KB, once per level). Local only: the
     // parts exchange itself happens regardless (every peer must send the same messages). No effect on the game.
     bool desync_dump = true;
+
+    // ---- round 12: launching the Conquest mode (frontend.cpp / fe_mode.cpp; front end only, no simulation) ----
+    // The red urn bottom right of the main menu (-> the Conquest setup screen) and in the multiplayer lobby (the
+    // session plays Conquest). false = the original's menus pixel for pixel (faithful, the front-end references).
+    bool mode_menu = false;
 };
 
 extern PortSettings g_settings;     // defined in mc_globals.cpp (default = faithful)

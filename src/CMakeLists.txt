@@ -110,7 +110,8 @@ set(MC_SIM_CORE mcengine/thing.cpp mcengine/terrain_gen.cpp mcengine/terrain_pai
 set(MC_SIM_ALL ${MC_SIM_CORE} mcengine/sim_all.cpp mcengine/effects.cpp mcengine/projectiles.cpp mcengine/spells.cpp
     mcengine/castle.cpp mcengine/scenery.cpp mcengine/creature_common.cpp mcengine/creatures.cpp mcengine/input.cpp
     mcengine/creatures2.cpp mcengine/creatures3.cpp mcengine/ai_wizard.cpp mcengine/sound.cpp
-    mcengine/debug_cmd.cpp mcengine/mode_level.cpp mcengine/mode_dump.cpp mcengine/scenario.cpp)
+    mcengine/debug_cmd.cpp mcengine/mode_level.cpp mcengine/mode_dump.cpp mcengine/scenario.cpp
+    mcengine/mode_rules.cpp mcengine/mode_bots.cpp)
 mc_test(mcdata_tests tests/mcdata_tests.c)
 file(GLOB MC_TEST_CMAKE CONFIGURE_DEPENDS tests/*.cmake)
 foreach(f ${MC_TEST_CMAKE})

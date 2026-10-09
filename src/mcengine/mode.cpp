@@ -1,10 +1,20 @@
 // Port-only game modes: the mode state block (mode.h). Round 10 (task A).
 #include "mode.h"
+#include "mode_rules.h"
 #include "settings.h"
 #include "player.h"
 #include <cstring>
 
 ModeState g_mode;
+// mode_rules.h: the sides of a mode run (here because the simulation core calls same_side; mode_rules.cpp sets them)
+bool g_mode_teams = false;
+int (*g_hook_mode_side_of_owner)(int owner) = nullptr;
+
+bool mode_same_side_records(int rec_a, int rec_b) {
+    if (rec_a == rec_b) return true;
+    if (!g_mode_teams || rec_a < 0 || rec_a > 7 || rec_b < 0 || rec_b > 7) return false;
+    return g_mode.players[rec_a].side == g_mode.players[rec_b].side;
+}
 void (*g_hook_mode_tick)() = nullptr;        // player.h (defined here: every unit test links mode.cpp)
 void (*g_hook_mode_level_start)() = nullptr;
 uint32_t (*g_hook_mode_checksum_globals)(uint32_t h) = nullptr;
@@ -40,6 +50,7 @@ void mode_begin(uint32_t mode, const ModeParams &params) {
 void mode_end() {
     const bool was = mode_active();
     g_mode = ModeState{};
+    g_mode_teams = false;
     if (g_hook_mode_tick == mode_tick) g_hook_mode_tick = nullptr;
     if (was) gameplay_force_rules(nullptr);
 }
@@ -51,9 +62,25 @@ void mode_level_start() {
     if (g_hook_mode_level_start) g_hook_mode_level_start();
 }
 
+void (*g_hook_mode_match_tick)() = nullptr;
+
 void mode_tick() {
     if (!mode_active()) return;
     g_mode.tick++;
+    if (g_hook_mode_match_tick) g_hook_mode_match_tick();
+}
+
+static uint32_t s_proposal_mode = GAME_MODE_ORIGINAL;
+static ModeParams s_proposal_params;
+
+void mode_set_proposal(uint32_t mode, const ModeParams &params) {
+    s_proposal_mode = mode < GAME_MODE_COUNT ? mode : GAME_MODE_ORIGINAL;
+    s_proposal_params = params;
+}
+
+uint32_t mode_proposal(ModeParams *params) {
+    if (params) *params = s_proposal_mode != GAME_MODE_ORIGINAL ? s_proposal_params : ModeParams{};
+    return s_proposal_mode;
 }
 
 uint32_t mode_rng_next() {
@@ -74,13 +101,36 @@ void mode_serialise(uint8_t *out) {
     std::memcpy(out + 4, &g_mode, sizeof g_mode);
 }
 
+bool mode_params_read(const uint8_t *in, size_t n, ModeParams *out) {
+    if (!in || !out || (n != MODE_PARAMS_V1_SIZE && n != sizeof(ModeParams))) return false;
+    *out = ModeParams{};
+    std::memcpy(out, in, n);                    // v1: the first 32 bytes, MatchRules stay the defaults
+    return true;
+}
+
+// Version 1 (rounds 10-11): the same block with a 32-byte ModeParams.
+static constexpr size_t MODE_STATE_V1_SIZE = sizeof(ModeState) - (sizeof(ModeParams) - MODE_PARAMS_V1_SIZE);
+
+bool mode_serialised_size_ok(size_t n) { return n == mode_serialised_size() || n == 4 + MODE_STATE_V1_SIZE; }
+
 bool mode_deserialise(const uint8_t *in, size_t n) {
-    if (!in || n != mode_serialised_size()) return false;
+    if (!in || n < 4) return false;
     uint32_t v;
     std::memcpy(&v, in, 4);
-    if (v != MODE_STATE_VERSION) return false;
     ModeState m;
-    std::memcpy(&m, in + 4, sizeof m);
+    if (v == MODE_STATE_VERSION && n == mode_serialised_size()) {
+        std::memcpy(&m, in + 4, sizeof m);
+    } else if (v == 1 && n == 4 + MODE_STATE_V1_SIZE) {
+        constexpr size_t head = offsetof(ModeState, params);
+        constexpr size_t tail = sizeof(ModeState) - offsetof(ModeState, tick);
+        const uint8_t *p = in + 4;
+        std::memcpy(&m, p, head);
+        mode_params_read(p + head, MODE_PARAMS_V1_SIZE, &m.params);
+        std::memcpy(reinterpret_cast<uint8_t *>(&m) + offsetof(ModeState, tick), p + head + MODE_PARAMS_V1_SIZE, tail);
+        m.version = MODE_STATE_VERSION;
+    } else {
+        return false;
+    }
     if (m.mode >= GAME_MODE_COUNT) return false;
     g_mode = m;
     g_hook_mode_tick = mode_active() ? mode_tick : nullptr;

@@ -847,7 +847,13 @@ NetGameRules net_local_rules() {
     r.thing_slots = (uint32_t)thing_pool_wanted_slots();
     r.possession_range_pct = (uint32_t)gameplay_rules().possession_range_pct;
     r.mode = (uint32_t)gameplay_rules().mode;
-    if (mode_active()) r.mode_params = g_mode.params;
+    if (mode_active()) {
+        r.mode_params = g_mode.params;
+    } else {
+        // round 12: the lobby's urn proposes a mode run for the session (mode_set_proposal)
+        ModeParams p;
+        if (const uint32_t m = mode_proposal(&p)) { r.mode = m; r.mode_params = p; }
+    }
     return r;
 }
 

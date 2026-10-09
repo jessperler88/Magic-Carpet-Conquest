@@ -321,7 +321,7 @@ static void test_movie_v3() {
         recorded.push_back(net_state_checksum());
     }
     const int32_t wx_end = wizard(0)->x;
-    CHECK(demo_recording() && demo_version() == 3);
+    CHECK(demo_recording() && demo_version() == DEMO_VERSION_MODE);
     demo_close();
     g_hook_player_local_input = saved_input;
     const size_t slots = (size_t)thing_pool_slots();               // a generated world: the extended pool (mode.h)

@@ -136,7 +136,7 @@ static void test_v3() {
         recorded.push_back(net_state_checksum());
     }
     CHECK(demo_recording());
-    CHECK(demo_extended() && demo_version() == 3);
+    CHECK(demo_extended() && demo_version() == DEMO_VERSION_MODE);
     const long written = demo_packets_written();
     demo_close();
     g_hook_demo_order_out = nullptr;
@@ -160,7 +160,7 @@ static void test_v3() {
         std::memcpy(&r, mvx.data() + sizeof h, sizeof r);
         std::memcpy(&m, mvx.data() + sizeof h + sizeof r, sizeof m);
     }
-    CHECK(std::memcmp(h.magic, "MCPX", 4) == 0 && h.version == 3 && h.thing_slots == 1000);
+    CHECK(std::memcmp(h.magic, "MCPX", 4) == 0 && h.version == DEMO_VERSION_MODE && h.thing_slots == 1000);
     CHECK(r.possession_range_pct == 120 && r.mode == GAME_MODE_CONQUEST);
     CHECK(m.mode == GAME_MODE_CONQUEST && m.params.seed == 1 && m.params.bots == 3 && m.record_format == DEMO_RECORD_FORMAT);
     CHECK(fs::exists(rec / "movie" / "gax00011.dat") && fs::exists(rec / "movie" / "max00011.dat"));
@@ -175,7 +175,7 @@ static void test_v3() {
     g_hook_player_local_input = nullptr;                            // mcport plays movies without local input
     g_hook_demo_order_in = order_in;
     CHECK(demo_open(g_tmp.string().c_str(), 11));
-    CHECK(mode_active() && g_mode.params.seed == 1 && demo_version() == 3);
+    CHECK(mode_active() && g_mode.params.seed == 1 && demo_version() == DEMO_VERSION_MODE);
     CHECK(gameplay_rules().possession_range_pct == 120 && gameplay_rules().mode == (int)GAME_MODE_CONQUEST);
     const std::vector<uint32_t> played = play(kTicks + 10);
     CHECK(demo_packets_total() == written);
@@ -258,6 +258,45 @@ static void test_v1_v2() {
     demo_set_record_dir("");
 }
 
+// Round 12: ModeParams grew MatchRules (64 bytes). A round-11 MODE block (version 1) and a version-3 movie header (32-byte
+// ModeParams) still read, with the match rules at their defaults.
+static void test_round11_formats() {
+    ModeParams p;
+    p.seed = 77; p.world_size = 1024; p.bots = 5; p.world.water = 40;
+    p.match.team[2] = 9;                                        // not in a v1 layout: must read back as 0
+    mode_begin(GAME_MODE_CONQUEST, p);
+    g_mode.tick = 1234; g_mode.ai_seed = 99; g_mode.players[3].flags = MODE_PLAYER_GOD;
+    std::vector<uint8_t> v2(mode_serialised_size());
+    mode_serialise(v2.data());
+    // the v1 layout: version 1, the block with the first 32 bytes of ModeParams only
+    const size_t head = 4 + offsetof(ModeState, params), cut = sizeof(ModeParams) - MODE_PARAMS_V1_SIZE;
+    std::vector<uint8_t> v1(v2.begin(), v2.begin() + (long)(head + MODE_PARAMS_V1_SIZE));
+    v1.insert(v1.end(), v2.begin() + (long)(head + sizeof(ModeParams)), v2.end());
+    const uint32_t one = 1;
+    std::memcpy(v1.data(), &one, 4);
+    CHECK(v1.size() == v2.size() - cut && mode_serialised_size_ok(v1.size()) && mode_serialised_size_ok(v2.size()));
+    mode_end();
+    CHECK(mode_deserialise(v1.data(), v1.size()));
+    CHECK(g_mode.version == MODE_STATE_VERSION && g_mode.mode == GAME_MODE_CONQUEST && g_mode.params.seed == 77 &&
+          g_mode.params.world_size == 1024 && g_mode.params.bots == 5 && g_mode.params.world.water == 40 &&
+          g_mode.params.match.team[2] == 0 && g_mode.tick == 1234 && g_mode.ai_seed == 99 &&
+          g_mode.players[3].flags == MODE_PLAYER_GOD);
+    mode_end();
+    CHECK(mode_deserialise(v2.data(), v2.size()) && g_mode.params.match.team[2] == 9);
+    mode_end();
+    // a version 3 movie header: mode, 32-byte params, record format, reserved
+    uint8_t raw[sizeof(DemoModeHeader)] = {};
+    const uint32_t mode = GAME_MODE_CONQUEST, fmt = DEMO_RECORD_FORMAT;
+    std::memcpy(raw, &mode, 4);
+    std::memcpy(raw + 4, &p, MODE_PARAMS_V1_SIZE);
+    std::memcpy(raw + 4 + MODE_PARAMS_V1_SIZE, &fmt, 4);
+    DemoModeHeader mh;
+    CHECK(demo_mode_header_size(3) == 48 && demo_mode_header_size(4) == sizeof(DemoModeHeader));
+    CHECK(demo_mode_header_read(raw, 3, &mh) && mh.mode == GAME_MODE_CONQUEST && mh.params.seed == 77 &&
+          mh.params.match.team[2] == 0 && mh.record_format == DEMO_RECORD_FORMAT);
+    std::printf("round 11 formats: MODE v1 block and movie v3 header read (match rules = defaults)\n");
+}
+
 int main(int argc, char **argv) {
     mc_install_crash_handler();
     g_game = argc > 1 ? argv[1] : MC_DEFAULT_GAME_DIR;
@@ -268,6 +307,7 @@ int main(int argc, char **argv) {
     std::error_code ec;
     fs::remove_all(g_tmp, ec);
     fs::create_directories(g_tmp / "rec" / "movie");
+    test_round11_formats();
     test_v3();
     test_v1_v2();
     fs::remove_all(g_tmp, ec);

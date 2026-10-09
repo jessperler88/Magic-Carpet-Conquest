@@ -451,7 +451,7 @@ bool savestate_load_file(const char *path) {
     }
     if (!game || !conf || (!maps && !wrld)) { s_state_error = "a required chunk is missing"; return false; }
     if (!globals_valid(glob, glob_n)) { s_state_error = "globals chunk missing or of another version"; return false; }
-    if (mode && mode_n != mode_serialised_size()) { s_state_error = "mode chunk of another version"; return false; }
+    if (mode && !mode_serialised_size_ok(mode_n)) { s_state_error = "mode chunk of another version"; return false; }
     const size_t e = h.thing_slots - (uint32_t)MC_THING_SLOTS;
     if (e && (!pool || pool_n != 4 + e * (sizeof(ThingImage) + 8) || get32(pool) != h.thing_slots)) {
         s_state_error = "pool chunk missing or of the wrong size";

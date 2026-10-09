@@ -12,6 +12,7 @@
 // player_commands_process: the tick counters are already incremented, player 0's packet is not yet
 // executed. Playback therefore loads the state at the same point (first call for player 0).
 #pragma once
+#include <cstring>
 #include "mc_types.h"
 #include "mode.h"
 
@@ -140,13 +141,27 @@ bool demo_extended();           // the movie being played / recorded uses the mv
 // mode_start_run with the recorded mode and ModeParams; refused when the hook is missing) and forces the
 // recorded rules; demo_close stops it (g_hook_demo_mode_stop). v1 / v2 movies and the original's mvi movies
 // play exactly as before.
-struct DemoModeHeader {         // version 3: follows DemoExtRules
+struct DemoModeHeader {         // version 3 / 4: follows DemoExtRules
     uint32_t   mode;            // GAME_MODE_* (mode.h), != 0
-    ModeParams params;          // as mode_begin got them
+    ModeParams params;          // as mode_begin got them (version 3: the 32-byte ModeParams of rounds 10-11)
     uint32_t   record_format;   // 1: CmdPacket + u16 blob_len + blob
     uint32_t   reserved[2];
 };
-static_assert(sizeof(DemoModeHeader) == 48);
+static_assert(sizeof(DemoModeHeader) == 80);
+// Version 4 (round 12) = version 3 with ModeParams' MatchRules; written for every new mode recording. Version 3
+// movies still play (their header is 48 bytes, the match rules read as the defaults).
+constexpr int DEMO_VERSION_MODE = 4;
+inline size_t demo_mode_header_size(int version) {
+    return version >= 4 ? sizeof(DemoModeHeader) : sizeof(DemoModeHeader) - (sizeof(ModeParams) - MODE_PARAMS_V1_SIZE);
+}
+inline bool demo_mode_header_read(const uint8_t *raw, int version, DemoModeHeader *out) {
+    const size_t np = version >= 4 ? sizeof(ModeParams) : MODE_PARAMS_V1_SIZE;
+    *out = DemoModeHeader{};
+    std::memcpy(&out->mode, raw, 4);
+    if (!mode_params_read(raw + 4, np, &out->params)) return false;
+    std::memcpy(&out->record_format, raw + 4 + np, 12);
+    return true;
+}
 constexpr uint32_t DEMO_RECORD_FORMAT = 1;
 constexpr size_t   DEMO_ORDER_BLOB_MAX = 0xffff;
 constexpr int      DEMO_SIM_GLOBALS = 5;
