@@ -254,6 +254,7 @@ struct EV {                                  // vertex cache entry
     uint32_t stamp;
     float xc, zc;
     int32_t h, hm;                           // height - cam_z (incl. wave), mirrored height
+    int32_t plane;                           // the reflection plane hm mirrors about (water_plane, map height units)
     int32_t shade, hz;
     int32_t sx, sy;                          // projection of (xc, h, zc) when zc >= kNear
     uint8_t proj;
@@ -279,6 +280,59 @@ double fog_haze(double d2) {
     return (d2 - F.near2) / (F.far2 - F.near2);
 }
 
+// Reflection planes (port fix, 2026-10-09). The original mirrors the whole landscape about sea level (height 0) and
+// scales the mirror's wave wobble with the height, so water above sea level - the original's own rivers, the lakes of
+// a generated world - shows the reflected banks far below its surface, rippling in wide brown bands. Here every vertex
+// (and Thing) is mirrored about the level of the nearest water instead: per 4 x 4-cell block of the window the lowest
+// water surface in it, spread to the blocks up to kWaterReach blocks away (nearest first); no water nearby = sea level.
+// Where the nearest water is the sea the plane is 0 and the vertex is exactly the original's.
+constexpr int kWaterBlock = 4;              // cells per block side
+constexpr int kWaterReach = 4;              // blocks (16 cells): how far a water surface's plane reaches
+int g_wl_n = 0;                             // blocks per side; 0 = no planes this frame (everything at sea level)
+std::vector<int16_t> g_wl_raw, g_wl;        // per block: lowest water height in it / of the nearest water; -1 none
+
+void build_water_planes() {
+    const int n = 2 * kWin / kWaterBlock + 1;   // vertex offsets -kWin..kWin
+    g_wl_n = n;
+    g_wl_raw.assign((size_t)n * n, -1);
+    g_wl.assign((size_t)n * n, -1);
+    for (int j = -kWin; j < kWin; ++j) {
+        const int cyc = world_wrap_cell(F.cam_cy + j);
+        int16_t *row = &g_wl_raw[(size_t)((j + kWin) / kWaterBlock) * n];
+        for (int i = -kWin; i < kWin; ++i) {
+            const uint32_t cell = world_cell(world_wrap_cell(F.cam_cx + i), cyc);
+            if (!tex_prop(g_tex_prop_water, g_map_type[cell])) continue;
+            int16_t &b = row[(i + kWin) / kWaterBlock];
+            const int16_t h = (int16_t)g_map_height[cell];
+            if (b < 0 || h < b) b = h;
+        }
+    }
+    for (int bj = 0; bj < n; ++bj)
+        for (int bi = 0; bi < n; ++bi) {
+            int best = -1;
+            for (int r = 0; r <= kWaterReach && best < 0; ++r)
+                for (int y = bj - r; y <= bj + r; ++y) {
+                    if (y < 0 || y >= n) continue;
+                    const bool edge_row = y == bj - r || y == bj + r;
+                    for (int x = bi - r; x <= bi + r; x += (edge_row || r == 0) ? 1 : 2 * r) {
+                        if (x < 0 || x >= n) continue;
+                        const int v = g_wl_raw[(size_t)y * n + x];
+                        if (v >= 0 && (best < 0 || v < best)) best = v;
+                    }
+                }
+            g_wl[(size_t)bj * n + bi] = (int16_t)best;
+        }
+}
+
+// The reflection plane (map height units, 0 = sea level) at cell-corner offset (i, j).
+int32_t water_plane(int i, int j) {
+    if (g_wl_n == 0) return 0;
+    const int bi = std::clamp((i + kWin) / kWaterBlock, 0, g_wl_n - 1);
+    const int bj = std::clamp((j + kWin) / kWaterBlock, 0, g_wl_n - 1);
+    const int v = g_wl[(size_t)bj * g_wl_n + bi];
+    return v < 0 ? 0 : v;
+}
+
 // Vertex at cell-corner offset (i, j) from the camera cell (-kWin..kWin).
 const EV &vertex(int i, int j) {
     EV &e = g_vc[(size_t)(j + kWin) * kVN + (i + kWin)];
@@ -293,7 +347,11 @@ const EV &vertex(int i, int j) {
     const int32_t height = (int32_t)g_map_height[cell];
     int32_t wave = (mc_sin((unsigned)(F.phase + cx * 0x80) & 0x7ff) >> 8) *
                    (mc_sin((unsigned)(cyc * 0x80 + F.phase) & 0x7ff) >> 8);
-    e.hm = -F.cam_z - ((((wave >> 4) + 0x8000) * height) >> 10);
+    // mirrored about the local water level (water_plane; the original: always 0)
+    // (ground below the plane is under that water: flattened onto the surface, not mirrored up into the sky)
+    const int32_t plane = water_plane(i, j);
+    e.plane = plane;
+    e.hm = plane * 0x20 - F.cam_z - ((((wave >> 4) + 0x8000) * std::max(height - plane, 0)) >> 10);
     e.h = height * 0x20 - F.cam_z;
     if (g_map_flags[cell] & 8) e.h -= wave >> 10; else wave = 0;
     int32_t shade = wave * 8 + (((int32_t)g_map_light[cell] * 0x100 + 0x80) << 8);
@@ -451,6 +509,9 @@ void emit_quad(int i0, int j0, int s, bool mirrored) {
     const uint32_t cell = world_cell(cx, cyc);
     const uint8_t texture = g_map_type[cell];
     if (mirrored && texture == 0) return;
+    // a mirrored quad across two reflection planes (a lake next to lower water) would be a tall stretched slab: left
+    // out, the sky shows through (the original has one plane, sea level, everywhere)
+    if (mirrored && (e00.plane != e10.plane || e00.plane != e11.plane || e00.plane != e01.plane)) return;
     const double dmx = (i0 * 256.0 + s * 128.0) - F.fx, dmy = (j0 * 256.0 + s * 128.0) - F.fy;
     const int m = mip_for(std::sqrt(dmx * dmx + dmy * dmy), s);
     uint8_t mode = EXT_FILL_TEX_GOURAUD, colour = 0;
@@ -719,7 +780,10 @@ void emit_cell_things(int i, int j, bool mirrored) {
         if (!pick_sprite(t, d, false, p)) continue;
         const double h = std::floor(size) + 1.0, w = std::floor(std::floor(size) * p.w / p.h) + 1.0;
         int32_t ix, iy;
-        project(xc, mirrored ? (double)(-z - F.cam_z) : (double)(z - F.cam_z), zc, ix, iy);
+        // mirrored: about the local water level as the terrain (water_plane; the original: sea level)
+        const int32_t plane_z = mirrored ? water_plane(i, j) * 0x20 : 0;
+        const int32_t mz = plane_z > 0 ? 2 * plane_z - std::max(z, plane_z) : -z;       // sea level: the original
+        project(xc, mirrored ? (double)(mz - F.cam_z) : (double)(z - F.cam_z), zc, ix, iy);
         const int32_t mode = fog == 0x2000 ? p.mode_lit : p.mode_fog;
         push_sprite(p, ix, iy, w, h, mirrored ? 2u : 1u, mode, fog, hz);
         g_render_ext_stats.things_drawn++;
@@ -995,8 +1059,11 @@ static void render_ext_draw(uint8_t *pix, int pitch, int width, int height, cons
     if (g_stamp == 0) { g_stamp = 1; for (EV &e : g_vc) e.stamp = 0; }
     if (g_vc.size() != (size_t)kVN * kVN) g_vc.assign((size_t)kVN * kVN, EV{});
     g_tris.clear(); g_sprites.clear(); g_order.clear();
-    if (F.second && F.cam_z < 0x1000)
+    g_wl_n = 0;
+    if (F.second && F.cam_z < 0x1000) {
+        build_water_planes();
         for (int L = F.levels; L >= 0; --L) draw_level(L, true);
+    }
     for (int L = F.levels; L >= 0; --L) draw_level(L, false);
     g_render_ext_stats.levels = F.levels + 1;
 

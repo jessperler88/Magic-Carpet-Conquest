@@ -44,6 +44,7 @@
 #include "world.h"
 #include "world_set.h"
 #include "tables.h"
+#include "gen/core_tables.h"
 #include "debug_overlay.h"
 #include "mcfile.h"
 #include "crash_handler.h"
@@ -510,6 +511,55 @@ int main(int argc, char **argv) {
             CHECK(cv.twice == 0 && cv.ring > 500 && cv.beyond200 > 2000, "generated world dd 255 coverage");
             CHECK(distinct > 16, "generated world frame has %d colours", distinct);
             CHECK(net_state_checksum() == sum_a, "drawing the generated world changed the game state");
+
+            // 10. inland water (a river / lake above sea level) with the reflection on: low over the widest stretch of
+            //     water at height >= 24, looking across it (user screenshots 2026-10-09: the reflected banks drawn far
+            //     below the surface in rippling brown bands). PPM to look at; render-only.
+            auto water = [](uint32_t c) { return g_map_type[c] < 164 && g_tex_prop_water[g_map_type[c]] != 0; };
+            // prefer waving water (Thing-free map flag 8: the wave wobble, the brown bands of the screenshots)
+            int best_cell = -1, best_n = 0, best_wave = 0;
+            for (uint32_t cell = 0; cell < g_world.cells; cell += 7) {
+                const int h = g_map_height[cell];
+                if (!water(cell) || h < 24 || h > 118) continue;    // the reflection pass needs cam_z < 0x1000
+                const int wave = (g_map_flags[cell] & 8) ? 1 : 0;
+                if (wave < best_wave) continue;
+                if (wave > best_wave) { best_wave = wave; best_n = 0; }
+                int n = 0;
+                const int x0 = world_cell_x(cell), y0 = world_cell_y(cell);
+                for (int dy = -3; dy <= 3; dy++)
+                    for (int dx = -3; dx <= 3; dx++) {
+                        const uint32_t c2 = world_cell(world_wrap_cell(x0 + dx), world_wrap_cell(y0 + dy));
+                        n += water(c2) && g_map_height[c2] == h;
+                    }
+                // a wide stretch (>= 40 of 49 cells), then the highest: the old wobble grows with the height
+                if (n >= 40 && (best_n < 40 || h > g_map_height[best_cell])) { best_n = n; best_cell = (int)cell; }
+                else if (best_n < 40 && n > best_n) { best_n = n; best_cell = (int)cell; }
+            }
+            CHECK(best_cell >= 0, "no inland water in the generated world");
+            if (best_cell >= 0) {
+                const int x0 = world_cell_x((uint32_t)best_cell), y0 = world_cell_y((uint32_t)best_cell);
+                Camera wc{};
+                wc.cam_x = world_wrap_cell(x0) * 256 + 128;
+                wc.cam_y = world_wrap_cell(y0 + 5) * 256 + 128;                  // 5 cells south, looking north
+                wc.yaw = 0;
+                wc.cam_z = (std::min)(g_map_height[best_cell] * 0x20 + 0x200, 0xfc0);   // the reflection pass: < 0x1000
+                wc.pitch = 60; wc.roll = 0; wc.zoom = 0x80;
+                const uint8_t keep_second = g_state->opt_second_surface;
+                g_state->opt_second_surface = 1;
+                Img wimg = render_ext_frame_wh(wc, 64, 1, 960, 600);
+                g_state->opt_second_surface = keep_second;
+                write_ppm("w_inland_water.ppm", wimg.data(), 960, 600);
+                // over the water, skimming it and looking down across it (the screenshots' angle)
+                wc.cam_y = world_wrap_cell(y0 + 2) * 256 + 128;
+                wc.cam_z = (std::min)(g_map_height[best_cell] * 0x20 + 0xc0, 0xfc0);
+                wc.pitch = 110;
+                g_state->opt_second_surface = 1;
+                wimg = render_ext_frame_wh(wc, 64, 1, 960, 600);
+                g_state->opt_second_surface = keep_second;
+                write_ppm("w_inland_water2.ppm", wimg.data(), 960, 600);
+                std::printf("inland water: cell %d,%d height %d%s (%d of 49 cells around at that level) -> w_inland_water.ppm\n",
+                            x0, y0, g_map_height[best_cell], best_wave ? " waving" : "", best_n);
+            }
         }
         mode_stop_run();
         g_settings = defaults;
