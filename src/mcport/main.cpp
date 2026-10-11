@@ -1313,8 +1313,12 @@ int main(int argc, char **argv) {
             } else if (level_mouse) {
                 // relative motion (logical pixels) -> virtual 640-wide coordinates, clamped as the driver did;
                 // the remainder is kept so many small per-frame motions (high frame rates) add up exactly
+                // (user, 2026-10-11) keys.mouse_invert_y off: up / down reversed in flight; the spell book's and
+                // the map's pointer (input modes 2 / 4) keep following the mouse
+                const uint8_t im = g_state->players[g_state->local_player & 7].input_mode;
+                const bool flip_y = !s_opts.mouse_invert_y && im != 2 && im != 4;
                 mouse_acc_x += in.mouse_dx * 640;
-                mouse_acc_y += in.mouse_dy * virtual_h();
+                mouse_acc_y += (flip_y ? -in.mouse_dy : in.mouse_dy) * virtual_h();
                 s_level_mx += mouse_acc_x / plat.fb_w; mouse_acc_x %= plat.fb_w;
                 s_level_my += mouse_acc_y / plat.fb_h; mouse_acc_y %= plat.fb_h;
                 // controller: the right stick places the pointer (offset from the centre = steering), the

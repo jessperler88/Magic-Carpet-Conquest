@@ -42,6 +42,8 @@ struct PlatformOptions {
     KeyChord load_slot[10];
     KeyChord quit_now;              // leave the port at once (F12)
     KeyChord menu;                  // round 9: the in-level pause menu (Esc; main.cpp only takes it in a level)
+    bool mouse_invert_y = true;     // flight: mouse forward = pointer up, as the original (the nose goes down); off:
+                                    // mouse forward = pointer down. Not the spell book / map pointer, not the free camera
     // [pad]
     GamepadConfig pad;
 

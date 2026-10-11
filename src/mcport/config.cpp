@@ -235,6 +235,8 @@ const Desc k_desc[] = {
      "Tab opens and closes the spell book, like Enter (which keeps working)"},
     {"keys", "mouse_book_both", K_BOOL, PS(mouse_book_both), 0, 1, nullptr,
      "both mouse buttons at once open and close the spell book (the original); 0 = they only fire both hands"},
+    {"keys", "mouse_invert_y", K_BOOL, PO(mouse_invert_y), 0, 1, nullptr,
+     "flight: 1 = the mouse's up / down as the original, 0 = reversed (the spell book's pointer is not affected)"},
     {"keys", "quit_now", K_KEY, PO(quit_now), 0, 0, nullptr, "leave the port at once"},
     {"keys", "menu", K_KEY, PO(menu), 0, 0, nullptr,
      "in a level: open the port's pause menu (save / load / options / leave level); 'none' = the original's Esc (leave the level at once)"},

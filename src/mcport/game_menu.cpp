@@ -45,6 +45,7 @@ const Opt k_opts[] = {
     {"W A S D flight", "keys.wasd", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
     {"Tab opens the book", "keys.book_tab", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
     {"Both buttons open the book", "keys.mouse_book_both", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
+    {"Invert Y look axis", "keys.mouse_invert_y", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
     // (user, 2026-10-11) 100 % = the defaults: OPL music gain 256, sample mix gain 96. Applied at once (main.cpp).
     {"Music volume", "audio.music_volume", nullptr, 0, 512, 0, " %", nullptr, 256},
     {"Sound volume", "audio.sound_volume", nullptr, 0, 192, 0, " %", nullptr, 96},
