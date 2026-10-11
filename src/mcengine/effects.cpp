@@ -447,14 +447,19 @@ void effect_eruption_update(Thing *t) {
         return;
     }
     if (t->aux == 0) {
+        // port (mode runs): both indices may be stale - a volcano deleted because its ground moved (above) stays
+        // "the erupting one", and its slot goes to the next Thing created. The original then writes 0xfa into that
+        // Thing's aux and deletes whatever sits in the smoke's slot; in 40-minute matches a newly founded castle
+        // came out at "level 251" that way (2026-10-11). Only a crater / a smoke column is touched.
+        const bool guard = mode_active();
         uint16_t prev = g_state->volcano_thing;
-        if (prev != 0) thing_ref(prev)->aux = 0xfa;
+        if (prev != 0 && (!guard || (thing_ref(prev)->cls == 10 && thing_ref(prev)->state == 0x12))) thing_ref(prev)->aux = 0xfa;
         g_state->volcano_thing = (uint16_t)thing_index(t);
         Thing *smoke = thing_create(thing_pos(t), 10, 0x13);
         if (smoke) {
             smoke->owner = t->owner;
             uint16_t old = g_state->volcano_smoke;
-            if (old != 0) thing_mark_delete(thing_ref(old));
+            if (old != 0 && (!guard || (thing_ref(old)->cls == 10 && thing_ref(old)->type == 0x13))) thing_mark_delete(thing_ref(old));
             g_state->volcano_smoke = (uint16_t)thing_index(smoke);
         }
     }
@@ -794,8 +799,13 @@ void effect_mana_hoard_update(Thing *t) {
     DamageSlot &claim = t->damage_slots[1];
     if (claim.attacker == 0) return;
     Thing *claimer = thing_ref(claim.attacker);
-    if (claimer->cls == 3 && t->mana_owner == 0) {
-        uint16_t self = thing_index(t), to = thing_index(claimer);
+    // port (mode runs): a computer wizard claims its mode-6 target by writing mana_owner (ai_mode6_collect_mana), a
+    // hoard included; the original then deletes the hoard without the transfer and its balls keep naming the freed
+    // slot - mana_totals_update adds their mana to whatever Thing is created there next, every tick (seen as a spell
+    // whose mana_total, its price, grew without end). A mode run always hands the balls on (free without a wizard).
+    const bool transfer = claimer->cls == 3 && (t->mana_owner == 0 || mode_active());
+    if (transfer || mode_active()) {
+        uint16_t self = thing_index(t), to = transfer ? thing_index(claimer) : 0;
         for (int i = 1; i < thing_pool_slots(); i++) {
             Thing *p = thing_at(i);
             if (p->mana_owner == self) p->mana_owner = to;

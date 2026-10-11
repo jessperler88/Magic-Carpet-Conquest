@@ -6,6 +6,7 @@
 #include "text.h"
 #include "mc_math.h"
 #include "gen/player_tables.h"
+#include "mode.h"               // castle_max_level
 #include "palette_fx.h"
 #include "net.h"
 #include "world_set.h"
@@ -131,6 +132,15 @@ void player_set_input_mode(PlayerRec *rec, int mode) {
     player_cd_check_quit();
 }
 
+// port (mode_rules.h; here because the creature tests link the core without mode_rules.cpp)
+bool mode_target_sheltered(const Thing *target) {
+    if (!mode_active() || target->cls != 3 || target->type > 1) return false;
+    const uint16_t ci = player_block(target)->castle;
+    if (ci == 0) return false;
+    const Thing *c = thing_at(thing_wrap(ci));
+    return c->cls == 3 && c->type == 2 && thing_collide(target, c) != 0;
+}
+
 // player_rebuild_spell_index_40240
 void player_rebuild_spell_index(Thing *t) {
     PlayerBlock *P = player_block(t);
@@ -219,11 +229,23 @@ void castle_apply_level_stats(Thing *castle, Thing *spell, int health, int mana)
 }
 
 // castle_set_level_stats_42200 (switch on the castle level in Thing.aux)
+//
+// port (mode runs; user, 2026-10-11): levels up to 11. The mana of a level is both what the castle holds and what
+// the next level costs; the original doubles it to 320000 for the last step, more than a wizard with most of a
+// generated world's mana had (292000 at the peak of the user's match). In a mode run the steps from level 6 on go up
+// by 80000: 240000 for level 7, then 320000 .. 560000 for 8 .. 11.
+static const int32_t k_mode_castle_health[12] = {0, 20000, 40000, 40000, 60000, 60000, 80000, 80000, 100000, 100000, 120000, 120000};
+static const int32_t k_mode_castle_mana[12]   = {5000, 10000, 20000, 40000, 80000, 160000, 240000, 320000, 400000, 480000, 560000, 30000000};
+
 void castle_set_level_stats(Thing *castle) {
     static const int32_t health[8] = {0, 20000, 40000, 40000, 60000, 60000, 80000, 80000};
     static const int32_t mana[8]   = {5000, 10000, 20000, 40000, 80000, 160000, 320000, 30000000};
     Thing *spell = castle_owner_spell(castle);
     unsigned lvl = (uint16_t)castle->aux;
+    if (castle_max_level() == 11) {
+        if (lvl <= 11) castle_apply_level_stats(castle, spell, k_mode_castle_health[lvl], k_mode_castle_mana[lvl]);
+        return;
+    }
     if (lvl > 7) return;
     castle_apply_level_stats(castle, spell, health[lvl], mana[lvl]);
 }
@@ -235,6 +257,7 @@ void castle_spell_set_capacity(Thing *castle) {
     if (!spell) return;
     unsigned lvl = (uint16_t)castle->aux;
     int32_t cap = lvl > 7 ? 0 : mana[lvl];
+    if (castle_max_level() == 11) cap = lvl > 11 ? 0 : k_mode_castle_mana[lvl];
     spell->mana_total = cap;
     if (spell->duration != 0) spell->mana = cap / spell->duration;
 }

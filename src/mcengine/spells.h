@@ -31,6 +31,8 @@ int  spell_dropped_dispatch(Thing *t);                      // spell_dropped_dis
 // caster is dead / out of mana, the spell needs more castle mana than the caster's castle holds, or
 // the cast is about to start (cast_ticks == duration) without mana_total mana; else 1.
 int  spell_can_cast(Thing *spell, Thing *caster);
+// The mana that requirement is tested against: the castle's, plus (mode runs) the caster's claimed town buildings'.
+int32_t spell_castle_store(const Thing *caster);
 // spell_charge_mana_46f20(spell, caster): on the launch tick the caster's mana rate (Thing.mana_cost,
 // added to its mana by the flyer update) is charged with -mana_total, returns 1; on the other cast
 // ticks a positive rate is zeroed (no regeneration while casting), returns 0.

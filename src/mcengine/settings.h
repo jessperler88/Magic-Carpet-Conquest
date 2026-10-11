@@ -80,6 +80,8 @@ struct PortSettings {
     // In flight the original reads no plain letter key except I, P and R, and not Tab.
     bool keys_wasd = false;         // W / S / A / D act as Up / Down / Left / Right (the arrows keep working)
     bool keys_book_tab = false;     // Tab opens and closes the spell book like Enter (Enter keeps working)
+    bool mouse_book_both = true;    // both mouse buttons at once open / close the spell book (the original); off: they
+                                    // only fire both hands (mcport's default - user, 2026-10-11)
 
     // ---- round 10 task E: desync tooling (net.cpp parts exchange, replay_check.h) ----
     // On the first checksum mismatch of a network game (MC_NET_SYNC side channel) write the complete state to

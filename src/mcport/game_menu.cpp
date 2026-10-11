@@ -24,6 +24,8 @@ struct Opt {
     int lo, hi, step;
     const char *suffix;
     const char *note;            // shown after the value (when it does not apply at once)
+    int full = 0;                // > 0: a slider - the key's raw value at 100 %; shown and stepped in tens of
+                                 // per cent from 0 to 200 with a bar (the volumes)
 };
 
 const Opt k_opts[] = {
@@ -42,6 +44,10 @@ const Opt k_opts[] = {
     {"Thing pool", "game.thing_slots", "1000:1000 (original)|2000:2000|4000:4000|8192:8192|16384:16384|32768:32768", 0, 0, 0, nullptr, "next level"},
     {"W A S D flight", "keys.wasd", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
     {"Tab opens the book", "keys.book_tab", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
+    {"Both buttons open the book", "keys.mouse_book_both", "0:Off|1:On", 0, 0, 0, nullptr, nullptr},
+    // (user, 2026-10-11) 100 % = the defaults: OPL music gain 256, sample mix gain 96. Applied at once (main.cpp).
+    {"Music volume", "audio.music_volume", nullptr, 0, 512, 0, " %", nullptr, 256},
+    {"Sound volume", "audio.sound_volume", nullptr, 0, 192, 0, " %", nullptr, 96},
 };
 constexpr int k_opt_count = (int)(sizeof k_opts / sizeof k_opts[0]);
 
@@ -74,6 +80,7 @@ struct GameMenu::Row {
     bool enabled = true;
     Action action = A_NONE;
     int arg = 0;                 // slot / option index
+    int slider = -1;             // 0..200: a bar filled to this many per cent of 200 beside the value
 };
 
 void GameMenu::open(const GameMenuEnv &env, PortSettings *s, PlatformOptions *p) {
@@ -124,6 +131,8 @@ std::string GameMenu::option_value(int opt) const {
         const int cur = std::atoi(v.c_str());
         text = v;
         for (const Choice &c : parse_choices(o.choices)) if (c.value == cur) text = c.text;
+    } else if (o.full > 0) {
+        text = std::to_string((std::atoi(v.c_str()) * 100 + o.full / 2) / o.full) + (o.suffix ? o.suffix : "");
     } else {
         text = v + (o.suffix ? o.suffix : "");
     }
@@ -162,6 +171,12 @@ void GameMenu::step_option(int opt, int dir) {
             if (idx < 0) idx = m - 1;
         }
         next = cs[idx].value;
+    } else if (o.full > 0) {
+        int pct = ((cur * 100 + o.full / 2) / o.full + 5) / 10 * 10;                    // the nearest ten per cent
+        pct += (dir == 0 ? 1 : dir) * 10;
+        if (dir == 0 && pct > 200) pct = 0;                                           // Enter wraps
+        pct = std::max(0, std::min(200, pct));
+        next = (pct * o.full + 50) / 100;
     } else {
         const int hi = option_hi(o);
         next = cur + (dir == 0 ? 1 : dir) * o.step;
@@ -229,6 +244,10 @@ std::vector<GameMenu::Row> GameMenu::rows() const {
         for (int i = 0; i < k_opt_count; i++) {
             const bool forced = std::strcmp(k_opts[i].key, "game.possession_range_pct") == 0 && env_.network;
             add(k_opts[i].label, A_OPTION, i, !forced, option_value(i));
+            if (k_opts[i].full > 0) {
+                const int raw = std::atoi(config_get(k_opts[i].key, *s_, *p_).c_str());
+                r.back().slider = std::max(0, std::min(200, (raw * 100 + k_opts[i].full / 2) / k_opts[i].full));
+            }
         }
         add("Back", A_BACK);
         break;
@@ -398,6 +417,13 @@ void GameMenu::draw(int vh, int ptr_x, int ptr_y) {
             if (row.action == A_OPTION && sel) v = "< " + v + " >";
             const int vw = ui_text_width(v.c_str());
             ui_draw_text(v.c_str(), x + w - pad - vw, ry + 3, row.enabled ? (sel ? gold : dim) : grey);
+            if (row.slider >= 0) {                              // the slider: a framed bar left of the number
+                const int bw = 100, bh = rh - 6, bx = x + w - pad - 84 - bw, by = ry + 3;
+                vga_draw_box(bx, by, bw, bh, sel ? gold : dim);
+                const int fill = (bw - 4) * row.slider / 200;
+                if (fill > 0) gfx_fill_rect(bx + 2, by + 2, fill, bh - 4, sel ? gold : dim);
+                gfx_fill_rect(bx + 2 + (bw - 4) / 2, by + 1, 1, bh - 2, edge);         // the 100 % mark
+            }
         }
     }
     if (scroll_ > 0) ui_draw_text("^", x + w - pad, top - rh + 3, dim);

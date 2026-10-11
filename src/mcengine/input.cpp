@@ -666,7 +666,7 @@ static void local_input_flight() {
         player_queue_command(0x1c, 0);
         g_key_last = 0;
     }
-    if (g_mouse_click_left != 0 && g_mouse_click_right != 0) {      // both buttons: the spell book
+    if (g_settings.mouse_book_both && g_mouse_click_left != 0 && g_mouse_click_right != 0) {   // both buttons: the spell book
         if (!(g_cfg->flags & 0x200) && t->health >= 0) player_queue_command(0x14, 2);
         g_mouse_click_right = 0;
         g_mouse_click_left = 0;
@@ -691,11 +691,13 @@ static void local_input_flight() {
 
 // Port (settings.h keys_book_tab): Tab closes the book / leaves mode 1 like Enter.
 static bool book_tab_pressed() { return g_settings.keys_book_tab && g_key_last == MC_SC_TAB; }
+// Port (settings.h mouse_book_both): both mouse buttons at once, the original's way in and out of the book.
+static bool both_buttons() { return g_settings.mouse_book_both && g_mouse_click_left != 0 && g_mouse_click_right != 0; }
 
 // Input mode 1, 0x16de0.
 static void local_input_mode1() {
     player_function_keys();
-    if ((g_mouse_click_left != 0 && g_mouse_click_right != 0) || g_key_last == 0x1c || book_tab_pressed()) {
+    if (both_buttons() || g_key_last == 0x1c || book_tab_pressed()) {
         g_key_last = 0;
         g_mouse_click_right = 0;
         g_mouse_click_left = 0;
@@ -735,7 +737,7 @@ static void local_input_book() {
         }
         g_key_last = 0;
     }
-    if ((g_mouse_click_left != 0 && g_mouse_click_right != 0) || g_key_last == 0x1c || book_tab_pressed()) {   // close
+    if (both_buttons() || g_key_last == 0x1c || book_tab_pressed()) {   // close
         g_key_last = 0;
         g_mouse_click_right = 0;
         g_mouse_click_left = 0;

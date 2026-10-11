@@ -177,6 +177,14 @@ struct Placer {
         for (const Cell &c : seats) best = std::min(best, cell_dist(x, y, c.x, c.y));
         return best * 100 / std::max(voronoi, 1);
     }
+    // A creature grade (1..5, from the band) capped by the plain distance to the nearest seat, one grade per 40
+    // cells: on a crowded world (512 cells, 8 seats) the bands are so narrow that griffons and wyverns started 50
+    // cells from a seat and most computer wizards were out of the match within two minutes.
+    int grade_cap(int grade, int x, int y) const {
+        int best = 1 << 30;
+        for (const Cell &c : seats) best = std::min(best, cell_dist(x, y, c.x, c.y));
+        return std::min(grade, 1 + best / 40);
+    }
     int cls_at(int x, int y) const { return g_map_flags[world_cell(x, y)] & 7; }
     bool land(int x, int y) const {
         const int c = cls_at(x, y);
@@ -229,10 +237,13 @@ struct Placer {
 // creature models (level.py MODEL_NAMES class 5) by lair grade; krakens (water) are not placed on land
 struct Pack { uint8_t model; uint8_t lo, hi; };
 const Pack kPacks[5][3] = {
+    // Crabs are grade 4, not 2 (2026-10-10): one regenerates 39 health a tick, more than fireballs take off it, and
+    // they breed - packs 60 % of the way out razed the castles of wizards with the start kit all match long (bots
+    // harness: 37 of 144 computer wizards out of their matches with them at grade 2, 25 at grade 4).
     { {2, 6, 10}, {1, 4, 7},  {10, 4, 6} },     // 1: bees, vultures, emus
-    { {5, 3, 5},  {3, 2, 3},  {4, 3, 5}  },     // 2: crabs, worms, archers
-    { {7, 3, 5},  {9, 4, 6},  {8, 2, 4}  },     // 3: trolls, skeletons, griffons
-    { {0, 1, 2},  {8, 3, 5},  {7, 5, 7}  },     // 4: dragons, griffons, trolls
+    { {1, 5, 8},  {3, 2, 3},  {4, 3, 5}  },     // 2: vultures, worms, archers
+    { {7, 3, 5},  {9, 6, 9},  {8, 2, 4}  },     // 3: trolls, skeletons (6-9, 4-6 until 2026-10-10), griffons
+    { {0, 1, 2},  {5, 3, 5},  {7, 5, 7}  },     // 4: dragons, crabs, trolls
     { {16, 1, 2}, {11, 1, 1}, {0, 2, 3}  },     // 5: wyverns, a genie, dragons
 };
 
@@ -245,6 +256,7 @@ struct PayloadWeight { uint8_t kind, w[3]; };
 const PayloadWeight kPayloads[] = {
     {WTRIG_MANA, {6, 4, 3}}, {WTRIG_AMBUSH, {2, 4, 4}}, {WTRIG_EARTHQUAKE, {1, 2, 2}}, {WTRIG_VOLCANO, {0, 1, 2}},
     {WTRIG_STORM, {1, 2, 2}}, {WTRIG_CRATERS, {1, 1, 1}}, {WTRIG_ELITE, {0, 0, 1}}, {WTRIG_URN, {0, 1, 1}},
+    {WTRIG_UNDEAD, {0, 2, 3}},
 };
 
 int band_of(int pct) { return pct < 55 ? 0 : (pct < 95 ? 1 : 2); }
@@ -268,7 +280,10 @@ void place_payload(Placer &P, int kind, int band, int x, int y, uint16_t dis) {
         break;
     }
     case WTRIG_AMBUSH: {
-        const int grade = 1 + band * 2 + P.rng.below(2);
+        // capped by the distance to the nearest seat like the lairs and the wild packs (2026-10-11: it was not, and a
+        // circle in the contested band could set two packs of crabs on the wizard who flew over it two minutes into
+        // a match - crabs killed 12 - 14 wizards in four 40-minute matches on 1024 cells)
+        const int grade = P.grade_cap(1 + band * 2 + P.rng.below(2), x, y);
         for (int i = 0; i < 2; i++) place_pack(P, grade, x + P.rng.range(-6, 6), y + P.rng.range(-6, 6), dis);
         break;
     }
@@ -286,11 +301,25 @@ void place_payload(Placer &P, int kind, int band, int x, int y, uint16_t dis) {
         P.add(5, elite[P.rng.below(3)], x, y, dis, 0, dis);
         break;
     }
+    case WTRIG_UNDEAD: {
+        // a large undead army (user, 2026-10-10): the Skeleton Army spell's effect (class 10 type 0x24: up to 8
+        // skeletons rising in a ring, 64 wild ones at most) three to five times around the circle - 24 to 40 skeletons
+        // that march on the nearest castle and turn the villagers they reach
+        const int n = 3 + band;
+        const int turn = P.rng.below(0x800);
+        for (int i = 0; i < n; i++) {
+            const unsigned a = (unsigned)(turn + i * 0x800 / n);
+            const int ex = x + (int)(((int64_t)mc_sin(a) * 6 + 0x8000) >> 16), ey = y + (int)(((int64_t)mc_sin(a + 0x200) * 6 + 0x8000) >> 16);
+            P.add(10, 0x24, ex, ey, dis, 0, dis);
+        }
+        break;
+    }
     case WTRIG_URN: {
-        // a spell the template allows player 0 (+0x74) that is not a start spell (+0x10)
+        // a spell the template allows player 0 (+0x74) that is not a start spell (+0x10); not Smart Bomb (22), whose
+        // phase-2 pickup the 1996 engine never hands over (spells.cpp spell_update_shared)
         int cand[24], n = 0;
         for (int i = 0; i < 24; i++)
-            if (P.level->player_block[0][0x74 + i] == 1 && P.level->player_block[0][0x10 + i] == 0) cand[n++] = i;
+            if (i != 0x16 && P.level->player_block[0][0x74 + i] == 1 && P.level->player_block[0][0x10 + i] == 0) cand[n++] = i;
         if (n) P.add(12, (uint16_t)cand[P.rng.below(n)], x, y, dis, 0, kUrnPhase);
         else   P.add(10, 0x27, x, y, dis, 0, dis);
         break;
@@ -436,11 +465,56 @@ void place_features(Placer &P, int players) {
     }
 
     // a neutral town (the original's villager castle, effect 0x2d, built during generation) per seat
-    if (P.pick_orbit(60, 95, 24, true, orb, &n))
+    // The record's Parent is the building footprint - 16 (level_spawn_effect: effect_wizard_init(t, parent + 0x10)).
+    // Footprint 46 is the walled castle with four towers and a courtyard (29 x 29 cells, 52 people), 34 the keep with
+    // corner towers (21 x 21, 27 people), 25..32 the houses the builders found. (Until 2026-10-11 the footprint
+    // number itself was written here, i.e. 16 too high: the "houses" 25..28 came out as 41..44, and 41 is a
+    // 20-cell piece of labyrinth wall nobody can fly over - user, same day.)
+    // One orbit is a town per seat only in a symmetric world; without symmetry it is a single point, so the world
+    // had one town however many seats (user, 2026-10-11: no towns in a 1024 world without symmetry): repeated
+    // until there is a town for every seat.
+    for (int towns = 0; towns < players; towns += n) {
+    // (2026-10-11: with one fixed band and spacing a crowded world - 512 cells, 8 seats - sometimes had no room and
+    // came out with no town at all; a user's network match did.) Looser tries follow the first.
+    static const int kTry[][3] = { {60, 95, 36}, {55, 100, 28}, {50, 110, 20}, {40, 130, 14}, {30, 160, 8} };
+    bool placed = false;
+    for (const auto &k : kTry)
+        if (P.pick_orbit(k[0], k[1], k[2], true, orb, &n) && n > 0) { placed = true; break; }
+    if (!placed) break;
+    {
+        const uint16_t main_fp = P.rng.below(3) == 0 ? 34 : 46;
         for (int i = 0; i < n; i++) {
-            P.add(10, 0x2d, orb[i].x, orb[i].y, 0xffff, 0, 0xffff, (uint16_t)P.rng.range(3, 6));
+            P.add(10, 0x2d, orb[i].x, orb[i].y, 0xffff, 0, 0xffff, (uint16_t)(main_fp - 0x10));
             P.feature(WFEAT_TOWN, 0, orb[i].x, orb[i].y);
         }
+    }
+    // ... and its people (user, 2026-10-10: a few tents and nobody in them): two builders (they found the town's
+    // next buildings), four townies and a trader around every town, as the original's levels place them by hand.
+    // Hurting one makes a wizard wanted by the archers and griffons in sight. The same people for every seat's town.
+    // Three houses 24 to 27 cells around the castle (clear of its walls) make it a settlement from the start (user,
+    // same day: a couple of tents and one or two buildings a while into the game), and four archers guard it.
+    {
+        const int turn = P.rng.below(0x800);
+        for (int k = 0; k < 3; k++) {
+            const unsigned a = (unsigned)(turn + k * 0x2ab + P.rng.range(-0x60, 0x60));
+            const int r = P.rng.range(24, 27);
+            const int dx = (int)(((int64_t)mc_sin(a) * r + 0x8000) >> 16), dy = (int)(((int64_t)mc_sin(a + 0x200) * r + 0x8000) >> 16);
+            const uint16_t size = (uint16_t)P.rng.range(25, 30);
+            for (int i = 0; i < n; i++) {
+                const int x = orb[i].x + dx, y = orb[i].y + dy;
+                if (P.land(x, y) && P.free_records() >= 24) P.add(10, 0x2d, x, y, 0xffff, 0, 0xffff, (uint16_t)(size - 0x10));
+            }
+        }
+        static const uint8_t kPeople[] = {0xc, 0xc, 0xc, 0xd, 0xd, 0xd, 0xd, 0xd, 0xd, 0xe, 0xe, 4, 4, 4, 4};
+        for (uint8_t model : kPeople) {
+            const int dx = P.rng.range(-12, 12), dy = P.rng.range(-12, 12);
+            for (int i = 0; i < n; i++) {
+                const int x = orb[i].x + dx, y = orb[i].y + dy;
+                if (P.land(x, y)) P.add_extra(5, model, x, y);
+            }
+        }
+    }
+    }
 
     // mana springs: a blob of balls; bands safe / contested / rich
     for (int k = 0; k < orbits_for(s.springs); k++) {
@@ -494,28 +568,36 @@ void place_features(Placer &P, int players) {
     // spell urns (user, 2026-10-08): level pickups (class 12; every wizard can take one, a copy stays for the
     // others), graded by distance from the seats - per seat two near ones, one on contested ground, one far out.
     // The same spell for a whole orbit (fair). Not Smart Bomb (22): its phase-2 pickup is unbound in the 1996 engine.
+    // Rapid Fireball (0x17, the mini fireball) is a near one (user, 2026-10-10: never found in an urn); a tier's
+    // orbits hold different spells while it has any left.
     {
-        static const uint8_t kTier1[] = {0x01, 0x04, 0x05, 0x0d, 0x0e, 0x0f, 0x13};     // heal shield sight steal rebound lightning magnet
+        static const uint8_t kTier1[] = {0x01, 0x04, 0x05, 0x0d, 0x0e, 0x0f, 0x13, 0x17};   // heal shield sight steal rebound lightning magnet rapid
         static const uint8_t kTier2[] = {0x06, 0x09, 0x0a, 0x0b, 0x0c, 0x11, 0x14};     // quake crater teleport rubber invisible skeleton fire wall
         static const uint8_t kTier3[] = {0x07, 0x08, 0x12};                             // meteor volcano thunderbolt
         struct Tier { const uint8_t *ids; int count, lo, hi, per_seat; };
         const Tier tiers[3] = {{kTier1, (int)sizeof kTier1, 25, 60, 2}, {kTier2, (int)sizeof kTier2, 60, 100, 1},
                                {kTier3, (int)sizeof kTier3, 100, 170, 1}};
-        for (int t = 0; t < 3; t++)
+        for (int t = 0; t < 3; t++) {
+            uint8_t left[8];
+            int nleft = 0;
             for (int k = 0; k < orbits_for(tiers[t].per_seat); k++) {
                 if (!P.pick_orbit(tiers[t].lo, tiers[t].hi, 10, true, orb, &n, 256)) continue;
-                const uint8_t id = tiers[t].ids[P.rng.below(tiers[t].count)];
+                if (nleft == 0) { std::memcpy(left, tiers[t].ids, (size_t)tiers[t].count); nleft = tiers[t].count; }
+                const int pick = P.rng.below(nleft);
+                const uint8_t id = left[pick];
+                left[pick] = left[--nleft];
                 for (int i = 0; i < n && P.free_records() >= 24; i++) {
                     P.add(12, id, orb[i].x, orb[i].y, 0, 0, kUrnPhase);
                     P.feature(WFEAT_URN, (uint8_t)(t + 1), orb[i].x, orb[i].y, id);
                 }
             }
+        }
     }
 
     // lairs: creature packs graded 1..5 by distance from the seats, Poisson-disc spaced
     for (int k = 0; k < orbits_for(s.lairs); k++) {
         if (!P.pick_orbit(35, 160, 20, true, orb, &n)) continue;
-        const int grade = std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 35) * 5 / 120, 1, 5);
+        const int grade = P.grade_cap(std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 35) * 5 / 120, 1, 5), orb[0].x, orb[0].y);
         const Rng saved = P.rng;
         for (int i = 0; i < n; i++) {
             if (P.free_records() < 16) break;
@@ -538,7 +620,7 @@ void place_features(Placer &P, int players) {
     }
     for (int k = 0; k < wild / g; k++) {
         if (!P.pick_orbit(45, 200, 4, true, orb, &n, 16)) continue;
-        const int grade = std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 45) * 4 / 120, 1, 4);
+        const int grade = P.grade_cap(std::clamp(1 + (P.band_pct(orb[0].x, orb[0].y) - 45) * 4 / 120, 1, 4), orb[0].x, orb[0].y);
         const Pack &pk = kPacks[grade - 1][P.rng.below(3)];
         for (int i = 0; i < n; i++) P.add_extra(5, pk.model, orb[i].x, orb[i].y);
     }

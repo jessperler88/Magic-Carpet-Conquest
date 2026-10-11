@@ -215,6 +215,10 @@ static void test_sides() {
 // ---- 3 + 4: respawn and elimination ----------------------------------------------------------------------------
 static void test_respawn() {
     ModeParams p = params(12, 2);
+    // no wild creatures and no lairs: the rules are under test, and on this 256-cell world a pack at bot 1's seat
+    // piled 21200 damage on the castle the test gives it while it was still being built (gone the tick it stood)
+    p.world.wild = 0xff;
+    p.world.lairs = 0xff;
     p.match.win = MATCH_WIN_NONE;
     p.match.respawn_s = 3;
     p.match.respawn_level_s = 2;
@@ -297,12 +301,16 @@ static void test_desecration() {
     CHECK(c1 && c1->state == 4);
     Thing *w0 = wizard(0);
     const Pos home = *thing_pos(w0);
-    // 2 s inside, then out: reset
+    // 2 s inside, then out: the channel drains at twice the rate (not lost at once), gone after 1 s
     for (int i = 0; i < 2 * TPS; i++) { place(w0, *thing_pos(c1)); tick(); }
     CHECK((mp(0).flags & MODE_PLAYER_DESECRATING) && mp(0).desecrate_rec1 == 2);
     CHECK(mode_desecration_pct(1) == 50);
     place(w0, home);
     tick();
+    CHECK(!(mp(0).flags & MODE_PLAYER_DESECRATING) && mp(0).desecrate_ticks == 2 * TPS - 2 && mp(0).desecrate_rec1 == 2);
+    for (int i = 0; i < TPS / 2; i++) { place(w0, home); tick(); }
+    CHECK(mp(0).desecrate_ticks > 0 && mp(0).desecrate_ticks < TPS + 2);     // half a second later: about half of it left
+    for (int i = 0; i < TPS; i++) { place(w0, home); tick(); }
     CHECK(!(mp(0).flags & MODE_PLAYER_DESECRATING) && mp(0).desecrate_ticks == 0 && mode_desecration_pct(1) == 0);
     // the whole channel
     // the castle's spilled mana: balls owned by record 1's wizard
@@ -316,19 +324,37 @@ static void test_desecration() {
     };
     const int64_t balls_before = owned_ball_mana();
     const int32_t castle_mana = c1->mana;
-    int done = -1;
-    for (int i = 1; i <= 5 * TPS; i++) {
+    // one level per completed channel (user, 2026-10-10): the level-2 castle is one level down after 4 s (the
+    // channel starts again, the wizard still channelling) and gone after 8 s
+    const int levels = c1->aux;
+    int done = -1, first_drop = -1;
+    for (int i = 1; i <= 5 * TPS * levels; i++) {
         if (castle(1)) place(w0, *thing_pos(c1));
         tick();
         if (!castle(1)) { done = i; break; }
+        if (first_drop < 0 && c1->aux < levels) {
+            first_drop = i;
+            CHECK((mp(0).flags & MODE_PLAYER_DESECRATING) && mp(0).desecrate_ticks == 0 && mp(0).castles_razed == 0);
+            CHECK(c1->duration == 5);                   // the rebuild timer of a collapse (it releases the Castle spell)
+        }
+        // the owner's Castle spell is free again once the rebuild sequence has run (it stuck "busy" without it)
+        if (first_drop > 0 && i == first_drop + 3 * TPS) {
+            const uint16_t si = g_state->players[1].blk.spell_thing[0x10];
+            CHECK(c1->state == 4 && c1->duration == 0);
+            if (si != 0) CHECK(thing_at(si)->cast_ticks == 0);
+            std::printf("desecration: 3 s after the level fell the castle is in state %d, timer %d, the owner's Castle spell "
+                        "(Thing %d) cast_ticks %d\n", c1->state, (int)c1->duration, (int)si, si ? (int)thing_at(si)->cast_ticks : -1);
+        }
     }
-    CHECK(done == 4 * TPS);
+    CHECK(levels < 2 || first_drop == 4 * TPS);
+    CHECK(done == 4 * TPS * levels);
     CHECK(mp(0).castles_razed == 1 && !(mp(0).flags & MODE_PLAYER_DESECRATING));
     CHECK(!(mp(1).flags & MODE_PLAYER_ELIMINATED));      // alive: castle-less
     CHECK(c1->cls == 0 || c1->state != 4 || g_state->players[1].blk.castle == 0);
     const int64_t balls_after = owned_ball_mana();
-    std::printf("desecration: 2 s then out -> reset; 4 s -> castle razed after %d ticks; castle mana %d, record 1's "
-                "ball mana %lld -> %lld\n", done, (int)castle_mana, (long long)balls_before, (long long)balls_after);
+    std::printf("desecration: 2 s then out -> drained in 1 s; 4 s per level -> first level after %d ticks, the level-%d "
+                "castle gone after %d; castle mana %d, record 1's ball mana %lld -> %lld\n", first_drop, levels, done,
+                (int)castle_mana, (long long)balls_before, (long long)balls_after);
     CHECK(balls_after > balls_before);
     tick();
     // now dead without a castle: eliminated
@@ -492,6 +518,25 @@ static std::vector<uint32_t> scripted_run() {
         if (i >= 400 && i < 600 && castle(3)) place(wizard(0), *thing_pos(castle(3)));
         game_tick_sim();
         v.push_back(net_state_checksum());
+        if (i == 0) {                       // the parts of the first tick, for the message when two runs differ
+            static NetChecksumParts first;
+            static bool have = false;
+            NetChecksumParts now;
+            net_state_checksum_parts(&now);
+            if (have)
+                for (int k = 0; k < NCP_COUNT; k++)
+                    if (now.part[k] != first.part[k]) std::printf("determinism: part %s differs at tick 0\n", net_checksum_part_name(k));
+            static ModeState mode_first;
+            if (have) {
+                const uint8_t *x = (const uint8_t *)&mode_first, *y = (const uint8_t *)&g_mode;
+                for (size_t o = 0; o < sizeof(ModeState); o++)
+                    if (x[o] != y[o]) std::printf("determinism: g_mode byte %zu: %u then %u (players start at %zu, 64 each)\n", o, x[o], y[o],
+                                                  offsetof(ModeState, players));
+            }
+            mode_first = g_mode;
+            first = now;
+            have = true;
+        }
     }
     return v;
 }
@@ -501,6 +546,8 @@ static void test_determinism() {
     for (int q = 0; q < 4; q++) stats += mp(q).deaths + mp(q).kills_wizards + mp(q).kills_creatures;
     const std::vector<uint32_t> b = scripted_run();
     CHECK(!a.empty() && a == b);
+    for (size_t i = 0; i < a.size() && i < b.size(); i++)
+        if (a[i] != b[i]) { std::printf("determinism: first difference at tick %zu\n", i); break; }
     std::printf("determinism: two scripted 2 v 1 v 1 runs, %zu ticks, %s; deaths + kills %u; match %s\n", a.size(),
                 a == b ? "identical checksums every tick" : "DIVERGED", (unsigned)stats,
                 g_mode.match_state == MATCH_OVER ? "over" : "running");

@@ -41,7 +41,8 @@ void config_playing_defaults(PortSettings *s) {
     s->fps_cap = 0;
     s->quicksave_full = true;       // E: Alt+S / quick load keep consistent lists
     s->possession_range_pct = 130;
-    s->keys_wasd = true;            // round 8 (user request): WASD flies, Tab opens the spell book
+    s->mouse_book_both = false;     // user, 2026-10-11: both buttons fire both hands, they do not open the book
+    s->keys_wasd = true;           // round 8 (user request): WASD flies, Tab opens the spell book
     s->keys_book_tab = true;  // round 8 (user request): Possession reaches 30 % further
     s->mode_menu = true;            // round 12: the Conquest urn in the main menu and the lobby
 }
@@ -232,6 +233,8 @@ const Desc k_desc[] = {
      "flight: W / S / A / D = faster / slower / slide left / slide right, like the arrow keys (which keep working)"},
     {"keys", "book_tab", K_BOOL, PS(keys_book_tab), 0, 1, nullptr,
      "Tab opens and closes the spell book, like Enter (which keeps working)"},
+    {"keys", "mouse_book_both", K_BOOL, PS(mouse_book_both), 0, 1, nullptr,
+     "both mouse buttons at once open and close the spell book (the original); 0 = they only fire both hands"},
     {"keys", "quit_now", K_KEY, PO(quit_now), 0, 0, nullptr, "leave the port at once"},
     {"keys", "menu", K_KEY, PO(menu), 0, 0, nullptr,
      "in a level: open the port's pause menu (save / load / options / leave level); 'none' = the original's Esc (leave the level at once)"},

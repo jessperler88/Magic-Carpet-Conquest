@@ -19,6 +19,8 @@ RenderInterp   g_render_interp{};
 CellThingsFn   g_render_cell_things = nullptr;
 CellThingsFn   g_render_cell_things_mirrored = nullptr;
 uint32_t       g_anim_tick = 0;
+bool           g_wave_phase_on = false;
+int32_t        g_wave_phase = 0;
 RenderCamState g_rcam{};
 int32_t        g_eye_offset = g_eye_offset_default[0];        // DAT_00093b1c
 RollEntry      g_roll_table[MC_ROLL_MAX + 1];                 // DAT_000b3a10 (+ leading guard)
@@ -383,7 +385,7 @@ void render_landscape(const Camera &cam) {
     // The second-surface variant of the vertex pass also computes the mirrored height and marks
     // translucent / flat-shaded textures; the SIRDS path uses the plain variant.
     const bool second = g_state->opt_second_surface != 0 && !sirds;
-    const int32_t phase = (int32_t)(g_anim_tick << 6);             // player tick * 0x40
+    const int32_t phase = g_wave_phase_on ? g_wave_phase : (int32_t)(g_anim_tick << 6);   // player tick * 0x40
 
     int cx = cx0, cy = cy0;
     VertexRec *rec = V;

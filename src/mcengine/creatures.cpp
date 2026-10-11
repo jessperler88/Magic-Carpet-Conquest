@@ -8,6 +8,7 @@
 #include "level_features.h"   // effect_wizard_init, terrain_rect_height_range, castle_footprint
 #include "mc_math.h"
 #include "mode_rules.h"     // same_side (round 12)
+#include "mode.h"
 
 namespace {
 
@@ -280,6 +281,7 @@ void creature_archer_s25_update(Thing *t) {
             best_d = d;
         }
         if (enemy && !((enemy->type == 0 || enemy->type == 1) && owner_block(enemy)->timer210 != 0)) enemy = nullptr;
+        if (enemy && mode_target_sheltered(enemy)) enemy = nullptr;     // port (mode runs): not a wizard in its castle
         if (!enemy)         // the nearest skeleton in sight (cfg+0x8e42 = list 9)
             enemy = nearest_in_list(g_cfg->creature_lists[9], t, limit, [](const Thing *) { return true; });
         if (enemy) {
@@ -315,6 +317,11 @@ void creature_archer_s25_update(Thing *t) {
 // creature_archer_s26_update_1a630 (state 26 = base + 2): shoot arrows; every think tick the target
 // wizard is marked wanted again.
 void creature_archer_s26_update(Thing *t) {
+    if (mode_target_sheltered(thing_at(t->target))) {       // port (mode runs): lets go of a wizard in its castle
+        thing_set_state(t, 0x18 + 1);
+        creature_set_move_sprite(t);
+        return;
+    }
     creature_attack_target(t, 0x18, creature_attack_arrow);
     if (t->state != 0x1a) {
         creature_set_move_sprite(t);
@@ -405,6 +412,10 @@ void creature_skeleton_s54_update(Thing *t) {
         thing_set_state(t, 0x37);
         t->aux = 0x190;
         t->castle_size = 0;
+        // port (mode runs): twice the health once it has risen (2000) - with arrows that find their mark the
+        // archers of a world's towns shot every skeleton dead in a few minutes (user, 2026-10-10: the undead should
+        // be a lasting threat)
+        if (mode_active()) { t->max_health *= 2; t->health = t->max_health; }
         return;
     }
     if (now == 0x10) {
@@ -515,10 +526,21 @@ void creature_skeleton_s56_update(Thing *t) {
         if (!think_now(t)) break;
         int range = (int16_t)desc_of(t)->sight_radius;
         if (target->cls == 3 && target->type == 2) range += target->ext_x;     // castles: from the wall
-        if ((uint32_t)pos_dist_xyz(thing_pos(t), thing_pos(target)) >= (uint32_t)range)
+        if ((uint32_t)pos_dist_xyz(thing_pos(t), thing_pos(target)) >= (uint32_t)range) {
+            // port (mode runs): out of range of a creature that hit it (an archer shoots from 20 cells, a skeleton
+            // from 8) it walks up to it for as long as it is within 24 cells, instead of going back to wandering
+            // under the arrows - the archers shot every skeleton of a world dead without loss (user, 2026-10-10:
+            // the undead should be a lasting threat)
+            if (mode_active() && target->cls == 5 && (uint32_t)pos_dist_xyz(thing_pos(t), thing_pos(target)) < 0x1800u) {
+                t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
+                t->speed_cur = t->speed_base;
+                return;                                 // (stays in the attack state, keeps its marching speed)
+            }
             thing_set_state(t, 0x37);
-        else
+        } else {
+            if (mode_active()) t->speed_cur = 0;        // (it stood still to shoot before the port's approach)
             skeleton_attack_fire(t, target);
+        }
         break;
     }
     }
@@ -709,6 +731,10 @@ void creature_builder_s72_update(Thing *t) {
                 give_up = true;
             } else {
                 unsigned max_diff = ((ext_x >> 7) + (ext_y >> 7) > 4 ? 1u : 0u) + 0xf;
+                // port (mode runs): three times the slope - a generated world has little ground as flat as the
+                // original's hand-made town sites, and the builders gave up (user, 2026-10-10: the towns do not
+                // spread); the new building levels its own footprint
+                if (mode_active()) max_diff *= 3;
                 if (!terrain_rect_is_flat(&g_pos_scratch, ext_x >> 8, ext_y >> 8, max_diff)) return;
                 auto touches = [&](const Thing *o) {
                     int dx = world_signed(o->x - sx);
@@ -722,6 +748,23 @@ void creature_builder_s72_update(Thing *t) {
                     if (touches(thing_at(i))) return;
                 for (uint32_t i = g_cfg->player_list; i != 0; i = thing_at(i)->next)
                     if (thing_at(i)->type == 2 && touches(thing_at(i))) return;
+                // port (mode runs): the towns spread by one building every 30 s over the four a seat they start
+                // with, up to one per 64 x 64 cells of world and 96 at most (the original's stop at its 1000
+                // Things); a builder with no room wanders on and tries again
+                bool room = true;
+                if (mode_active()) {
+                    int buildings = 0;
+                    for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) buildings++;
+                    const int cells = g_world.size / 64, most = cells * cells < 96 ? cells * cells : 96;
+                    const int now = 4 * (int)(g_mode.params.bots + g_mode.params.humans) + (int)(g_mode.tick / (30 * MODE_TICKS_PER_SECOND));
+                    room = buildings < (now < most ? now : most);
+                }
+                if (!room) {
+                    t->aux = 5;
+                    t->target = 0;
+                    thing_set_state(t, (uint8_t)(base + 1));
+                    return;
+                }
                 Thing *n = thing_create(&g_pos_scratch, 10, 0x2d);
                 if (n) {
                     creature_sound(t, 10);
@@ -765,6 +808,26 @@ void villager_walk_to_wizard(Thing *t, int base, uint32_t min_dist_sq) {
     if (!think_now(t)) return;
     if (t->target == 0) {
         creature_wander_turn(t);
+        if (mode_active() && min_dist_sq == 0) {
+            // port (mode runs): a townie strolls for a few think ticks, then walks to one of the buildings within 56
+            // cells picked at random. The original's always takes the nearest; with every building full (a
+            // generated world's are) the whole town milled about the one castle (user, 2026-10-11).
+            t->rng = mc_lcg(t->rng);
+            if (t->rng % 4u != 0) return;
+            constexpr uint64_t kNear = (uint64_t)0x3800 * 0x3800;
+            int n = 0;
+            for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) n += dist_sq_xy16(thing_at(i), t) < kNear;
+            if (n > 0) {
+                t->rng = mc_lcg(t->rng);
+                int pick = (int)(t->rng % (uint32_t)n);
+                for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) {
+                    if (dist_sq_xy16(thing_at(i), t) >= kNear || pick-- != 0) continue;
+                    t->target = (uint16_t)i;
+                    t->speed_cur = t->speed_base;
+                    return;
+                }
+            }
+        }
         uint64_t best_d = kFarSq;
         Thing *best = nullptr;
         for (uint32_t i = g_cfg->wizard_list; i != 0; i = thing_at(i)->next) {

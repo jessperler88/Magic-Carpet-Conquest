@@ -317,6 +317,7 @@ void creature_wyvern_s96_update(Thing *t) { creature_idle_seek_leader(t, 0x60); 
 // creature_wyvern_s97_update_1f210 (state 97 = base + 1): creature_ai_step, and every
 // (think_period + 1) ticks the nearest wizard castle (wizard_list) in sight becomes the target (98).
 void creature_wyvern_s97_update(Thing *t) {
+    if (mode_active() && t->speed_cur == 0) t->speed_cur = t->speed_base;     // port: after holding over a building (s98)
     creature_ai_step(t, 0x60);
     if (t->state != 0x61) return;
     if (!every(t, (int16_t)desc_of(t)->think_period + 1)) return;
@@ -353,9 +354,30 @@ void creature_wyvern_s98_update(Thing *t) {
     default:
         break;
     }
-    creature_move_step(t);
     Thing *target = thing_at(t->target);
-    if ((t->tick & 7) == 0) {
+    // port (mode runs): within 1.5 cells of the middle of a building or castle a wyvern stops and turns on the spot
+    // to face it (its shots burst one step - about 1.4 cells - out, and a building is only hurt by a blast within a
+    // cell of its own). The original keeps walking about the middle; in a courtyard (the walled town castle, a wizard's
+    // castle) the walls then knock its heading about for good - it never faces the target, never fires, and stays
+    // (user, 2026-10-11). Its fireballs do not carry from outside the walls, so it has to go in.
+    bool hold = false;
+    // A wizard's castle is hurt by a blast anywhere in its box, so there it stops three quarters of the way in.
+    // And within 3 cells of a wizard: one sheltering in its castle stands still, and the wyvern circled it at arm's
+    // length for good without ever facing it.
+    if (mode_active() && (target->cls == 10 || target->cls == 3)) {
+        int reach = 0x180;
+        if (target->cls == 3) reach = target->type == 2 && target->ext_x * 3 / 4 > 0x180 ? target->ext_x * 3 / 4 : 0x300;
+        hold = pos_dist_xy(thing_pos(t), thing_pos(target)) < reach;
+    }
+    if (hold) {
+        // (speed 0: the move step still settles it to its flying height and turns it toward target_yaw)
+        t->target_yaw = (uint16_t)(pos_angle_to(thing_pos(t), thing_pos(target)) & 0x7ff);
+        t->speed_cur = 0;
+    } else if (mode_active() && t->speed_cur == 0) {
+        t->speed_cur = t->speed_base;
+    }
+    creature_move_step(t);
+    if (!hold && (t->tick & 7) == 0) {
         if (target->cls == 3 || (uint32_t)pos_dist_xyz(thing_pos(t), thing_pos(target)) >= 0x200u)
             t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
     }
@@ -375,6 +397,10 @@ void creature_wyvern_s98_update(Thing *t) {
             p->owner = t->owner;
             aim_projectile(p, t, target);
             p->z = (int16_t)(p->z + (int16_t)(t->ext_h << 2));
+            // port (mode runs): standing beside the target the shot goes down at its middle. The original's pitch
+            // is base to base from a start four body heights up, so the shot passes over the middle - a house's roof
+            // catches it, a courtyard does not, and a building is only hurt by a blast in its own cell
+            if (hold) p->pitch = (uint16_t)pos_pitch_to(thing_pos(p), thing_pos(target));
             p->damage = 0xbb8;
             p->mana = 0xea60;
             p->target = t->target;

@@ -118,7 +118,10 @@ struct ModePlayer {
     uint32_t castles_razed = 0;     // stats: enemy castles desecrated / destroyed
     int32_t  mana_peak = 0;         // stats: highest castle + transit mana
     uint32_t mana_hold_ticks = 0;   // mana dominance progress of this player's side (MATCH_WIN_MANA)
-    int32_t  reserved[4] = {};
+    int32_t  raid_ticks = 0;        // a computer wizard: ticks spent attacking castles since its last rest (ai_wizard.cpp)
+    uint32_t raid_rest_until = 0;   // ... and the g_mode.tick until which it attacks no castle
+    uint16_t balloons_extra[4] = {};    // Thing indices of the wizard's balloons 4.. (castle levels 8..11; the player
+                                    // block has three slots - castle.cpp balloon_slot)
 };
 static_assert(sizeof(ModePlayer) == 64);
 
@@ -149,7 +152,11 @@ struct ModeState {
     uint32_t   match_end_tick = 0;  // g_mode.tick when the match ended
     uint32_t   winner_side = 0; // ModePlayer.side of the winners (valid when MATCH_OVER and end_reason != NONE)
     uint32_t   end_reason = 0;  // MATCH_END_*
-    uint32_t   reserved[7] = {};
+    uint8_t    raid_level[8] = {};  // per player: 1 + the level of the castle a computer wizard is raiding, as it was when
+                                // the raid began (ai_mode7_attack_castle: one level a raid)
+    uint16_t   balloon8[8] = {};    // per player: the Thing index of the wizard's eighth balloon (castle level 11; slots
+                                // 4..7 are ModePlayer.balloons_extra - castle.cpp balloon_slot)
+    uint32_t   reserved[1] = {};
     ModePlayer players[8];
 };
 #pragma pack(pop)
@@ -161,6 +168,10 @@ constexpr uint32_t MODE_STATE_VERSION = 2;
 extern ModeState g_mode;
 
 inline bool mode_active() { return g_mode.mode != GAME_MODE_ORIGINAL; }
+// The highest castle level: the original's 7, in a mode run 11 once level_features.cpp has generated the footprints
+// 8..11 (it sets g_castle_footprints_to_11).
+extern bool g_castle_footprints_to_11;
+int castle_max_level();
 const char *mode_name(uint32_t mode);           // "original", "conquest", "?"
 
 // Start / stop a mode run. mode_begin clears g_mode, stores mode + params and forces GameplayRules.mode

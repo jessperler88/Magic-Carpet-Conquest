@@ -96,6 +96,11 @@ extern CellThingsFn g_render_cell_things_mirrored;
 // Water animation phase: the original reads the local player's tick (PlayerRec+0x12, "player+0x341d")
 // as a dword and uses tick*0x40 as the wave phase. The game loop copies the player's tick here.
 extern uint32_t g_anim_tick;
+// port (time control): when g_wave_phase_on, the wave phase is g_wave_phase instead of the tick's - mcport runs the
+// water at its normal pace while the game is fast-forwarded (at x16 the waves flickered; user, 2026-10-11).
+// Render-time only, never set headless.
+extern bool    g_wave_phase_on;
+extern int32_t g_wave_phase;
 
 // Grid geometry and the squared-distance limits of render_landscape_29050 (Phase 3 enlarges them).
 constexpr int     MC_GRID_COLS  = 40;         // 0x28 columns (lateral), -19..+20 cells

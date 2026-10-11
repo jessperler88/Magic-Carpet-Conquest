@@ -48,6 +48,15 @@ int ai_goal_default(Thing *t);                  // ai_goal_default_13a20 (sets m
 // creature of another side (returns 1, mode 0xd) within 24 cells of the own castle -> target; between the upgrade
 // and the castle attack goals.
 int ai_goal_defend_castle(Thing *t);
+// Port (mode runs only; 0 otherwise): a spell urn of a spell the AI casts and the wizard lacks, within reach of its
+// castle (further with every castle level) -> target, mode 4; between the attack goals and the mana.
+int ai_goal_fetch_spell(Thing *t);
+// Port (mode runs only; 0 otherwise): ai_goal_collect_mana for a ball within 48 cells of the own castle; after the
+// defence, before the castle attacks.
+int ai_goal_collect_near(Thing *t);
+// Port (mode runs only; 0 otherwise): ai_goal_defend_castle for any creature of another side within 24 cells of the
+// castle, attacking or not; after ai_goal_collect_near.
+int ai_goal_farm_creatures(Thing *t);
 int ai_set_mode(Thing *t, int mode);            // the 14 setters ai_set_mode0_13880 .. ai_set_mode11_13a00 (always 1)
 
 // ---- spells --------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@
 #include "constructors.h"     // crab_update_mana_sprite_36ac0
 #include "mc_math.h"
 #include "world_set.h"
+#include "mode_rules.h"       // mode_target_sheltered
 
 namespace {
 
@@ -376,6 +377,7 @@ void creature_griffon_s49_update(Thing *t) {
     creature_wander_turn(t);
     if (t->timer_a == 0) return;
     Thing *enemy = nearest_player_thing(t, false);
+    if (enemy && mode_target_sheltered(enemy)) enemy = nullptr;         // port (mode runs): not a wizard in its castle
     if (enemy && is_wizard_type(enemy) && owner_block(enemy)->timer210 != 0) {
         t->target = thing_index(enemy);
         owner_block(enemy)->timer210 = 200;
@@ -395,6 +397,10 @@ void creature_griffon_s49_update(Thing *t) {
 void creature_griffon_s50_update(Thing *t) {
     if (t->aux != 0) t->speed_cur = t->speed_base;
     t->flags |= 0x8000u;
+    if (mode_target_sheltered(thing_at(t->target))) {       // port (mode runs): lets go of a wizard in its castle
+        thing_set_state(t, 0x30 + 1);
+        return;
+    }
     if (creature_attack_target(t, 0x30, creature_attack_fire_griffon)) {
         creature_sound(t, 0x26);
         blame_wizard(t->target);

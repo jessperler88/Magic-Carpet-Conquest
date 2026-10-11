@@ -8,6 +8,7 @@
 #include "spells.h"
 #include "world_set.h"
 #include "mc_math.h"
+#include "mode.h"
 
 namespace {
 
@@ -380,6 +381,15 @@ int spell_dropped_update(Thing *t, int type, int state) {
 
     for (uint32_t pi = g_cfg->player_list; pi != 0 && pi < (uint32_t)thing_pool_slots(); pi = thing_at(pi)->next) {
         Thing *p = thing_at(pi);
+        // port (mode runs; user, 2026-10-10: the computer wizards mostly used fireball): a computer wizard at the
+        // pickup - touching it, or within 2 cells of the one it flew to (ai_goal_fetch_spell; it stops a cell short) -
+        // learns the spell a second later through its own countdown. The pickup stays as it is.
+        if (p->type == 1 && mode_active() && p->health >= 0) {
+            PlayerBlock *Q = block(p);
+            if (Q->spell_thing[id] == 0 && Q->ai_want_spell[id] == 0 && Q->ai_allowed[id] == 1 &&
+                (thing_collide(p, t) || (Q->ai_mode == 4 && p->target == thing_index(t) && pos_dist_xy(thing_pos(p), pos) <= 0x200)))
+                Q->ai_want_spell[id] = 25;
+        }
         if (p->type != 0) continue;                         // flyers only
         if (p->health < 0) continue;
         PlayerBlock *P = block(p);
@@ -452,13 +462,27 @@ int spell_dropped_dispatch(Thing *t) {
 
 // ---- cast helpers ------------------------------------------------------------------------------
 
+// What a wizard's castle holds for the spells' requirement (Thing.mana_cost): the castle's own mana, 0 without a
+// castle. port (mode runs): plus the mana of the town buildings the wizard has claimed. That mana counts in his
+// total but never reaches the castle (the balloons fetch balls only), so a wizard living off claimed towns had a
+// level-7 castle holding nothing and could cast none of the big spells (user, 2026-10-11).
+int32_t spell_castle_store(const Thing *caster) {
+    const PlayerBlock *P = block(caster);
+    if (P->castle == 0) return 0;
+    int64_t store = thing_ref(P->castle)->mana;
+    if (mode_active())
+        for (uint32_t i = g_cfg->wizard_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next)
+            if (thing_at(i)->mana_owner == thing_index(caster)) store += thing_at(i)->mana;
+    return store > 0x7fffffff ? 0x7fffffff : (int32_t)store;
+}
+
 // spell_can_cast_46e70
 int spell_can_cast(Thing *spell, Thing *caster) {
     PlayerBlock *P = block(caster);
     bool ok = caster->mana >= 0 && caster->health >= 0;
     if (ok && spell->mana_cost != 0) {
         // The spell draws on the castle: the caster needs one that holds mana_cost.
-        if (P->castle == 0 || spell->mana_cost > thing_ref(P->castle)->mana) ok = false;
+        if (P->castle == 0 || spell->mana_cost > spell_castle_store(caster)) ok = false;
     }
     if (ok) {
         // Only the start of a cast (cast_ticks == duration) needs the mana.

@@ -28,10 +28,23 @@ static inline Thing *thing_u16(uint16_t idx) { return thing_at(thing_wrap(idx));
 // The jump table at 0x41978 (castle_manage_balloons_and_guards_419a0): balloons / guards by level.
 int castle_level_balloons(unsigned level) {
     static const uint8_t n[8] = {0, 1, 1, 1, 2, 2, 3, 3};
+    // port: levels 8..11 - one more a level, 5 6 7 8 (user, 2026-10-11: the new tiers should come with more
+    // balloons, 8 a wizard at the top). The player block has 3 slots; the others are the mode's (balloon_slot).
+    if (level >= 8 && (int)level <= castle_max_level()) return (int)level - 3;
     return level < 8 ? n[level] : 0;
 }
+// The Thing index slot of a wizard's balloon i: 0..2 the player block's, 3..6 ModePlayer.balloons_extra, 7
+// ModeState.balloon8 (mode runs only).
+static uint16_t &balloon_slot(Thing *owner, int i) {
+    PlayerBlock *P = player_block(owner);
+    if (i < 3) return P->balloons[i];
+    if (i < 7) return g_mode.players[P->player_no & 7].balloons_extra[i - 3];
+    return g_mode.balloon8[P->player_no & 7];
+}
+static int balloon_slots() { return castle_max_level() > 7 ? 8 : 3; }
 int castle_level_guards(unsigned level) {
     static const uint8_t n[8] = {0, 0, 0, 4, 6, 0xe, 0x12, 0x22};
+    if (level >= 8 && (int)level <= castle_max_level()) return 0x22;   // port: levels 8..11 (34 guard slots)
     return level < 8 ? n[level] : 0;
 }
 
@@ -80,7 +93,7 @@ int castle_take_damage(Thing *t) {
     // Slot 5 (+0x7c): the castle spell's effect (27d20) writes the owner's index when the owner
     // casts Castle on his own castle.
     if ((int32_t)t->damage_slots[5].attacker == (int32_t)(int16_t)t->owner) {
-        if (t->aux < 7) t->flags |= 0x40;
+        if (t->aux < castle_max_level()) t->flags |= 0x40;       // 7; port: 11 in a mode run
         t->damage_slots[5].attacker = 0;
     }
     return result;
@@ -156,7 +169,7 @@ void castle_manage_balloons_and_guards(Thing *t) {
     for (; i < balloons; i++) {
         PlayerBlock *P = player_block(owner);
         P->balloon_mana = 0;                             // P+0x126, cleared on every iteration
-        Thing *b = thing_at(thing_wrap(P->balloons[i]));
+        Thing *b = thing_at(thing_wrap(balloon_slot(owner, i)));
         if (b == thing_at(0)) {
             // empty slot: a new balloon in the player's colour
             b = thing_create(thing_pos(t), 3, 3);
@@ -164,7 +177,7 @@ void castle_manage_balloons_and_guards(Thing *t) {
                 b->owner = t->owner;
                 b->sprite = (uint16_t)(b->sprite + (uint16_t)player_block(owner)->player_no);
                 b->mana_owner = t->owner;
-                player_block(owner)->balloons[i] = thing_index(b);
+                balloon_slot(owner, i) = thing_index(b);
                 b->state = 9;
             }
             continue;
@@ -172,7 +185,7 @@ void castle_manage_balloons_and_guards(Thing *t) {
         if (b->health < 0) {
             if (g_hook_thing_drop_mana_ball) g_hook_thing_drop_mana_ball(b);   // thing_drop_mana_ball_25fe0
             thing_mark_delete(b);
-            player_block(owner)->balloons[i] = 0;
+            balloon_slot(owner, i) = 0;
             continue;
         }
         const int32_t stored = t->mana + P->mana_in_transit;
@@ -185,9 +198,10 @@ void castle_manage_balloons_and_guards(Thing *t) {
                 // Room in the hold: the nearest own mana ball the other two balloons are not after.
                 // An empty slot reads the scratch Thing's target, zeroed first.
                 thing_at(0)->target = 0;
-                PlayerBlock *Pb = player_block(owner);
-                Thing *excl_b = thing_u16(thing_u16(Pb->balloons[(i + 2) % 3])->target);
-                Thing *excl_a = thing_u16(thing_u16(Pb->balloons[(i + 1) % 3])->target);
+                // (port: with four or five balloons the next two of the round, so two may still pick the same ball)
+                const int round = balloons > 3 ? balloons : 3;
+                Thing *excl_b = thing_u16(thing_u16(balloon_slot(owner, (i + 2) % round))->target);
+                Thing *excl_a = thing_u16(thing_u16(balloon_slot(owner, (i + 1) % round))->target);
                 Thing *ball = castle_find_free_mana_ball(b, excl_a, excl_b);
                 if (ball) b->target = thing_index(ball);
             }
@@ -196,13 +210,12 @@ void castle_manage_balloons_and_guards(Thing *t) {
         player_block(owner)->balloon_total += b->mana_total;     // P+0x122 (never cleared here)
     }
     // Balloons beyond the level's allowance drop their cargo and go.
-    for (; i < 3; i++) {
-        PlayerBlock *P = player_block(owner);
-        Thing *b = thing_at(thing_wrap(P->balloons[i]));
+    for (; i < balloon_slots(); i++) {
+        Thing *b = thing_at(thing_wrap(balloon_slot(owner, i)));
         if (b == thing_at(0)) continue;
         if (g_hook_thing_drop_mana_ball) g_hook_thing_drop_mana_ball(b);
         thing_mark_delete(b);
-        player_block(owner)->balloons[i] = 0;
+        balloon_slot(owner, i) = 0;
     }
 
     // Guards (creature type 0xf): one new guard per 0x10 castle updates into the first free slot.
@@ -408,6 +421,12 @@ void castle_destroyed_update(Thing *t) {
 // balloon_update_42530 (class 3 state 9): fly to the target (+0x92) the castle assigned - a mana
 // ball to swallow or the castle to unload at.
 void balloon_update(Thing *t) {
+    // port (mode runs; user, 2026-10-11): the balloons fly faster in a bigger world - 10 % at 512 cells, 25 % at
+    // 1024, 50 % at 2048 and above (the original's 0x30 a tick was set for 256 cells)
+    if (mode_active()) {
+        const int pct = g_world.size >= 2048 ? 150 : g_world.size >= 1024 ? 125 : g_world.size >= 512 ? 110 : 100;
+        t->speed_cur = (int16_t)((0x30 * pct + 50) / 100);
+    }
     Thing *tgt = thing_u16(t->target);
     if (tgt != thing_at(0)) {
         g_pos_scratch = *thing_pos(t);

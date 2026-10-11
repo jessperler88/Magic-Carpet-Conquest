@@ -966,7 +966,8 @@ static void render_ext_draw(uint8_t *pix, int pitch, int width, int height, cons
     F.second = g_state->opt_second_surface != 0;
     F.shadows = g_state->opt_shadows != 0;
     ++g_seg_frame;                                          // sleeping-segment layout (thing_pos)
-    F.phase = g_render_interp.active ? (int32_t)(((g_anim_tick - 1) << 6) + (g_render_interp.alpha * 64 >> 16))
+    F.phase = g_wave_phase_on ? g_wave_phase
+            : g_render_interp.active ? (int32_t)(((g_anim_tick - 1) << 6) + (g_render_interp.alpha * 64 >> 16))
                                      : (int32_t)(g_anim_tick << 6);   // lerped between ticks
     F.min_px = std::clamp(S.thing_min_px, 1, 16);
     const double half_diag = std::sqrt((double)F.W * F.W + (double)F.H * F.H) / 2.0 + std::fabs(F.horizon);

@@ -136,19 +136,26 @@ void stop_desecrating(ModePlayer &m) {
     m.desecrate_ticks = 0;
 }
 
-// The castle razed by a desecration: every level collapses as when it is destroyed (castle_destroyed_update:
+// A castle level taken by a desecration collapses as when the castle is destroyed (castle_destroyed_update:
 // castle_collapse_level spills a tenth per level and runs the collapse handler on the footprint; at level 0 the
 // castle is deleted and the owner's P.castle cleared), then its remaining mana is spilled as mana balls and the
 // balloons drop their cargo (castle_spill_mana / castle_manage_balloons_and_guards at level 0).
-void raze_castle(Thing *c, int by_record) {
+// A completed channel takes ONE level (user, 2026-10-10: one tier per desecration, by a human or a computer wizard
+// alike; a whole castle went in a single channel before). Returns true when that was the last level: the castle is
+// gone, its remaining mana spilled and the balloons' cargo dropped as above.
+bool desecrate_castle_level(Thing *c, int by_record) {
     c->killer = g_state->players[by_record].thing;       // castles_razed for the channeller (g_hook_mode_castle_gone)
-    for (int guard = 0; guard < 16; guard++) {
-        const bool last = c->aux <= 0;
-        castle_collapse_level(c);                       // aux - 1; deleted (P.castle = 0) when it reaches 0
-        if (last || c->aux <= 0) break;
-    }
+    castle_collapse_level(c);                           // aux - 1; deleted (P.castle = 0) when that leaves none
     castle_spill_mana(c);
     castle_manage_balloons_and_guards(c);
+    if (c->aux <= 0) return true;
+    // The rest of castle_destroyed_update: the 5-update rebuild timer, whose sequencer ends by releasing the owner's
+    // Castle spell (castle_collapse_level leaves it "busy"; without the timer it stayed busy until the castle was
+    // gone - user, 2026-10-10: the castle spell stuck on almost cast after a level was desecrated).
+    c->state = 4;
+    c->cast_ticks = 0;
+    c->duration = 5;
+    return false;
 }
 
 // Is wizard w inside castle c's courtyard? The footprint box of the castle's level (Thing extents, as
@@ -254,7 +261,16 @@ void tick_desecration(const MatchRulesResolved &r) {
             const Thing *c = castle_of(q);
             if (c && inside_courtyard(w, c)) target = q;
         }
-        if (target < 0) { stop_desecrating(m); continue; }
+        if (target < 0) {
+            // Outside: the channel on the castle left drains at twice the rate it built up instead of being lost at
+            // once (user, 2026-10-10: a human flying passes through a courtyard was thrown back to 0 every three
+            // seconds and never razed a castle, while a computer wizard hovers in it for the 25 s).
+            const bool keep = cur >= 0 && cur < n && castle_of(cur) && m.desecrate_ticks > 2;
+            if (!keep) { stop_desecrating(m); continue; }
+            m.flags &= ~MODE_PLAYER_DESECRATING;
+            m.desecrate_ticks -= 2;
+            continue;
+        }
         if (m.desecrate_rec1 != target + 1) { m.desecrate_rec1 = target + 1; m.desecrate_ticks = 0; }
         m.flags |= MODE_PLAYER_DESECRATING;
         if (m.desecrate_ticks < r.desecrate_ticks) m.desecrate_ticks++;
@@ -262,9 +278,12 @@ void tick_desecration(const MatchRulesResolved &r) {
         // complete: razed once the castle is standing (state 4; a castle in its build sequencer has a build effect
         // in flight that would write into the deleted Thing - the channel waits at 100 %)
         Thing *c = castle_of(target);
-        if (c->state != 4) continue;
-        raze_castle(c, p);
-        // every channel on that castle ends with it
+        if (c->state != 4 || c->duration != 0) continue;    // (duration: the rebuild timer after a collapse)
+        if (!desecrate_castle_level(c, p)) {
+            m.desecrate_ticks = 0;          // one level down: this wizard's channel starts again for the next
+            continue;
+        }
+        // the last level: every channel on that castle ends with it
         for (int q = 0; q < 8; q++)
             if (g_mode.players[q].desecrate_rec1 == target + 1) stop_desecrating(g_mode.players[q]);
         if (!wizard_alive(wizard_of(target))) eliminate(target);   // dead without a castle; alive: castle-less
@@ -377,10 +396,50 @@ void mode_rules_level_start() {
     mode_rules_sync();
 }
 
+// The dead rise (user, 2026-10-10: the undead should be a lasting threat - the wild skeletons a world starts with are
+// shot down by the towns' archers and the wizards within a quarter of an hour). Every five minutes of a generated
+// world's match, two rings of the Skeleton Army effect (class 10 type 0x24: up to 8 skeletons each, 64 wild ones at
+// most) rise on land 40 cells or more from every castle; they march on the nearest castle and turn the villagers they
+// reach, as the original's skeletons do. The place comes from the mode's own RNG (simulated: the same on every peer).
+// Skipped while 40 wild skeletons or more are about.
+static void tick_undead() {
+    constexpr uint32_t kEvery = 5 * 60 * MODE_TICKS_PER_SECOND;
+    if (!mode_params_generated(g_mode.params) || g_mode.tick == 0 || g_mode.tick % kEvery != 0) return;
+    int wild = 0;
+    for (uint32_t i = g_cfg->creature_lists[9]; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next)
+        wild += thing_at(i)->mana_owner == 0;
+    if (wild >= 40) return;
+    const int n = record_count();
+    for (int attempt = 0; attempt < 64; attempt++) {
+        const uint32_t r = mode_rng_next();
+        const int cx = (int)(r & g_world.cell_mask), cy = (int)((r >> 12) & g_world.cell_mask);
+        if (g_map_height[world_cell(cx, cy)] == 0) continue;                // water
+        bool clear = true;
+        for (int p = 0; p < n && clear; p++) {
+            const Thing *c = castle_of(p);
+            if (!c) continue;
+            int dx = world_signed(c->x - (cx << 8)), dy = world_signed(c->y - (cy << 8));
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            clear = dx >= 40 * 256 || dy >= 40 * 256;
+        }
+        if (!clear) continue;
+        for (int k = 0; k < 2; k++) {
+            Pos pos{};
+            pos.x = (cx << 8) + (k ? 0x500 : -0x500);
+            pos.y = cy << 8;
+            pos.z = (int16_t)terrain_height_at(&pos);
+            thing_create(&pos, 10, 0x24);
+        }
+        return;
+    }
+}
+
 void mode_rules_tick() {
     if (!mode_active()) return;
     if (g_mode.match_state == MATCH_OVER) { tick_over(); return; }
     const MatchRulesResolved r = mode_rules_resolve(g_mode.params.match);
+    tick_undead();
     tick_players();
     tick_desecration(r);
     tick_win(r);

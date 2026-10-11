@@ -50,6 +50,7 @@ enum : uint8_t {
 enum : uint8_t { WOOD_PALM = 0, WOOD_OAK = 1 };
 enum : uint8_t {               // trigger payloads (data-driven table in worldgen.cpp)
     WTRIG_MANA = 1, WTRIG_AMBUSH, WTRIG_EARTHQUAKE, WTRIG_VOLCANO, WTRIG_STORM, WTRIG_CRATERS, WTRIG_ELITE, WTRIG_URN,
+    WTRIG_UNDEAD,               // an undead army rises around the circle (user, 2026-10-10)
     WTRIG_COUNT
 };
 struct WorldFeature {

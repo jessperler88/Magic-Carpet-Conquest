@@ -77,6 +77,12 @@ bool mode_rules_debug_end(int rec, bool win);
 
 // ---- queries (HUD, result screen, bots, tests) -----------------------------------------------------------------
 bool mode_match_over();
+// Mode runs only (false otherwise): `target` is a wizard touching its own castle, where nothing can hurt it. The
+// griffons and archers let go of such a target (creatures2.cpp, creatures.cpp): the original's keep shooting for as
+// long as it is in sight, every shot marks it wanted again and calls in every other griffon that sees it - a
+// computer wizard, which shelters at home instead of flying off, had its castle shot down under it for the rest of
+// the match after one stray hit (user, 2026-10-10: griffons bully the bots' castles).
+bool mode_target_sheltered(const Thing *target);
 // Seconds (rounded up) until record `rec` respawns, 0 when alive or the respawn is free.
 int  mode_respawn_seconds(int rec);
 // Desecration progress of the castle of record `rec` (0..100, the highest channel on it), 0 = none.

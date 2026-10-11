@@ -61,6 +61,12 @@ int projectile_line_of_fire_clear(Thing *shooter, Thing *target);
 // flyer (class 3 type 0): P.shots++, and P.hits++ when the Thing hit belongs to the owner of the
 // Thing aimed at. `hit` may be null, `target` is &things[t->target] (thing 0 = none).
 void projectile_record_hit_stats(Thing *t, Thing *hit, Thing *target);
+// Port (debug, not game state: never hashed, saved or read by the simulation): the same count for the computer
+// wizards, per player record, weapon ([0] fireball, [1] lightning, [2] the other counted projectiles) and what the
+// wizard was targeting ([0] a creature, [1] a wizard, [2] a castle, [3] anything else / nothing).
+// hit_any: the shot ended on a Thing; hit_target: on the Thing the wizard was targeting. Callers clear it.
+struct AiShotStats { uint32_t shots, hit_any, hit_target; };
+extern AiShotStats g_ai_shot_stats[8][3][4];
 // projectile_fly_and_impact_44150: the shared flight of states 2..6, 11, 15, 16, 17, 20.
 void projectile_fly_and_impact(Thing *t);
 // projectile_step_44ea0: one collision-tested step of the lightning ray (the Thing is not in a cell

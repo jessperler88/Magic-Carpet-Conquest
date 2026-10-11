@@ -103,6 +103,14 @@ void projectile_aim(Thing *p, const Thing *t, const Thing *target) {
     p->pitch = (uint16_t)pos_pitch_to(thing_pos(t), thing_pos(target));
     p->z = (int16_t)(p->z + t->ext_h);
     p->target = t->target;
+    if (mode_active() && target->cls == 5) {
+        // port (mode runs): at another creature the shot goes from where it starts (the shooter's top) to the
+        // target's middle. The original's pitch is base to base and the shot starts a body height up, so it flies
+        // over a target of the shooter's own height: an archer's arrows never touched a skeleton (user, 2026-10-10).
+        Pos from = *thing_pos(p), to = *thing_pos(target);
+        to.z = (int16_t)(to.z + target->ext_h / 2);
+        p->pitch = (uint16_t)pos_pitch_to(&from, &to);
+    }
 }
 
 } // namespace
@@ -111,6 +119,10 @@ void projectile_aim(Thing *p, const Thing *t, const Thing *target) {
 
 int creature_apply_damage(Thing *t) {
     int r = 0;
+    // port (mode runs): a hit wakes a sleeping creature. The original only takes damage awake (timer_a: a wizard -
+    // the local one - within 24 cells), yet its archers shoot at skeletons asleep or not: away from every wizard the
+    // arrows did nothing and the skeletons never turned on the archers (user, 2026-10-10, watching as a spectator).
+    if (t->timer_a == 0 && mode_active() && t->damage_slots[0].attacker != 0) t->timer_a = 0x10;
     if (t->timer_a != 0) {
         uint16_t attacker = t->damage_slots[0].attacker;
         if (attacker != 0) {

@@ -193,8 +193,9 @@ static void check_world(const ModeParams &mp, const char *png) {
         const Thing *t = thing_at((unsigned)k);
         towns += t->cls == 10 && t->type == 0x2d;
     }
-    if (towns != count[WFEAT_TOWN]) std::printf("  towns: %d placed, %d alive\n", count[WFEAT_TOWN], towns);
-    CHECK(towns == count[WFEAT_TOWN]);
+    // (a town is its first building, the feature, and up to three smaller ones around it where there is land)
+    std::printf("  towns: %d placed, %d buildings\n", count[WFEAT_TOWN], towns);
+    CHECK(towns >= count[WFEAT_TOWN] && towns <= 4 * count[WFEAT_TOWN]);
     // portals: mutual links, gates as Things whose destination is beside the other end
     for (size_t i = 0; i < L.features.size(); i++) {
         const WorldFeature &f = L.features[i];
@@ -233,7 +234,7 @@ static void check_world(const ModeParams &mp, const char *png) {
 // wizard flying into a portal gate comes out beside the other end.
 static void check_triggers_and_portals() {
     static const char *const kNames[WTRIG_COUNT] = {"?", "mana", "ambush", "earthquake", "volcano", "storm", "craters",
-                                                    "elite", "urn"};
+                                                    "elite", "urn", "undead"};
     bool fired[WTRIG_COUNT] = {};
     int portals_ok = 0;
     for (uint32_t seed = 11; seed < 17; seed++) {

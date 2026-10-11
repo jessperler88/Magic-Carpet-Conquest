@@ -76,6 +76,7 @@
 #include "mode_level.h"
 #include "fe_mode.h"
 #include "mode_flow.h"
+#include "mode_report.h"
 #include "mclog.h"
 #include "timectl.h"
 #include "screenshot.h"
@@ -88,6 +89,8 @@
 #include "inspect_tool.h"
 #include "world_set.h"
 #include <SDL.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -191,10 +194,15 @@ static void platform_request(InputPlatformRequest what, int arg) {
     if (what == INPUT_REQ_TOGGLE_RESOLUTION) game_toggle_resolution();
 }
 
+// The free camera shows the level's own palette: the game's palette effects belong to the local wizard (grey while
+// he is dead, red when hurt), and a spectator's wizard is dead for the whole match (user, 2026-10-11).
+static bool s_palette_plain = false;
 static void upload_palette() {
-    if (!palette_display_dirty()) return;
+    static bool was_plain = false;
+    if (!palette_display_dirty() && s_palette_plain == was_plain) return;
+    was_plain = s_palette_plain;
     uint8_t rgb[768];
-    mc_palette_to_rgb(g_display_palette6, rgb);
+    mc_palette_to_rgb(s_palette_plain ? g_palette6 : g_display_palette6, rgb);
     s_plat->set_palette(rgb);
     palette_display_clear_dirty();
 }
@@ -206,11 +214,11 @@ static void capture_rgb(int *w, int *h, std::vector<uint8_t> *rgb) {
         const ComposeOutput &o = compose_output();
         *w = o.display_w; *h = o.display_h;
         rgb->resize((size_t)*w * *h * 3);
-        compose_to_rgb(o, g_display_palette6, rgb->data());
+        compose_to_rgb(o, s_palette_plain ? g_palette6 : g_display_palette6, rgb->data());
     } else {
         rgb->resize((size_t)*w * *h * 3);
         for (int i = 0; i < *w * *h; i++) {
-            const uint8_t *c = g_display_palette6 + s_plat->fb[i] * 3;
+            const uint8_t *c = (s_palette_plain ? g_palette6 : g_display_palette6) + s_plat->fb[i] * 3;
             for (int k = 0; k < 3; k++) (*rgb)[(size_t)i * 3 + k] = (uint8_t)(c[k] << 2 | c[k] >> 4);
         }
     }
@@ -476,6 +484,7 @@ template <class F> static auto sim_tick(F fn) -> decltype(fn()) {
     s_console.after_tick();                   // round 10 (task B): the running scenario's step (assertions, host commands)
     s_ticks_run++;
     if (s_rts) rts_after_tick(s_ticks_run); else dump_after_tick(s_ticks_run);   // JSON dumps (task A, rts_run.h)
+    if (s_rts) mode_report_tick();            // the match report's recorder (read-only; console `report`)
     if (s_tick_log) tick_log_write(s_tick_log, s_ticks_run);   // + checksum parts with MC_TICK_LOG_PARTS=1 (task E)
     return r;
 }
@@ -484,6 +493,9 @@ template <class F> static auto sim_tick(F fn) -> decltype(fn()) {
 static PlatformOptions s_opts;                // mcport.ini / environment / command line (config_load)
 static GamepadMapper   s_pad_map;
 static std::string     s_save_dir;            // SDL_GetPrefPath("Bullfrog", "MagicCarpet")
+
+// In a network game: this instance's part, shown in the window title ("" = no network).
+static const char *s_net_role = "";
 
 // A short message for the player: stdout and the window title (the next title refresh replaces it).
 static void notice(const char *fmt, ...) {
@@ -549,11 +561,54 @@ static void log_mode_result(bool forfeit) {
           g_mode.match_state == MATCH_OVER ? "over" : "not decided", (unsigned)g_mode.tick, (unsigned)g_mode.end_reason,
           (unsigned)g_mode.winner_side, forfeit ? ", forfeited" : "");
 }
+
+// ---- the match report (mode_report.h; user, 2026-10-10: the data of a played Conquest match for tuning) -------------
+// Written to <save dir>/reports/<match>.txt when a match ends (the match is gone once the result screen is up) and by
+// the console's `report` at any time; `report` after the end copies the saved one. s_last_report: the last text.
+static std::string s_last_report, s_last_report_path;
+
+static bool write_match_report(bool to_file, bool to_clipboard, const char *why) {
+    std::string text;
+    if (mode_active() && mode_report_text(&text)) {
+        char stamp[32] = "";
+        const std::time_t now = std::time(nullptr);
+        std::tm tmv{};
+#ifdef _WIN32
+        localtime_s(&tmv, &now);
+#else
+        localtime_r(&now, &tmv);
+#endif
+        std::strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tmv);
+        text.insert(text.find('\n') + 1, std::string("saved:   ") + stamp + " (" + why + ")\n");
+        s_last_report = text;
+        s_last_report_path.clear();
+        if (to_file) {
+            std::error_code ec;
+            const std::filesystem::path dir = std::filesystem::path(s_save_dir) / "reports";
+            std::filesystem::create_directories(dir, ec);
+            const std::string path = (dir / (mode_report_name() + ".txt")).string();
+            SDL_RWops *f = SDL_RWFromFile(path.c_str(), "wb");
+            if (f && SDL_RWwrite(f, text.data(), 1, text.size()) == text.size()) s_last_report_path = path;
+            if (f) SDL_RWclose(f);
+            if (s_last_report_path.empty()) mclog(MCLOG_WARN, "report: could not write %s", path.c_str());
+        }
+    } else if (s_last_report.empty()) {
+        mclog(MCLOG_WARN, "report: no Conquest match played in this session yet");
+        return false;
+    }
+    const bool clip = to_clipboard && SDL_SetClipboardText(s_last_report.c_str()) == 0;
+    if (to_clipboard && !clip) mclog(MCLOG_WARN, "report: the clipboard refused it (%s)", SDL_GetError());
+    mclog(MCLOG_INFO, "report: %u lines%s%s%s", (unsigned)std::count(s_last_report.begin(), s_last_report.end(), '\n'),
+          s_last_report_path.empty() ? "" : " in ", s_last_report_path.c_str(), clip ? ", copied to the clipboard" : "");
+    return true;
+}
+
 // `leave_level`: the offline forfeit - the level is left at once (mode_flow_forfeit), else it ended already.
 static void finish_mode_run(bool forfeit, bool leave_level) {
     forfeit = forfeit || s_mode_forfeit;
     log_mode_result(forfeit);
     rts_dump_final();                           // --dump-final / MC_DUMP_FINAL, while the run is still there
+    write_match_report(true, false, forfeit ? "match forfeited" : "match over");
     if (leave_level) mode_flow_forfeit();       // ... mode_flow_finish(true)
     else mode_flow_finish(forfeit);             // the result for the front end, the run stopped, the result screen next
     s_rts = false;
@@ -687,6 +742,7 @@ static void time_command(DebugAction a, int n = 1) {
 static void dcam_enable(bool on) {
     if (on == s_dcam_on) return;
     s_dcam_on = on;
+    s_palette_plain = on;
     s_dcam_follow = -1;
     g_debug_camera.active = false;
     if (on) {
@@ -905,6 +961,7 @@ int main(int argc, char **argv) {
         if (const char *e = SDL_getenv("MC_NET_SYNC")) net_sync_set_interval(std::atoi(e));
         if (net_init() == 1) {
             g_fe_network = 1;                                    // DAT_0009e3c8
+            s_net_role = net->is_name_server() ? "NETWORK HOST" : "network: joined the host";
             mclog(MCLOG_INFO, "network: %s, sessions on port %u", net->is_name_server() ? "name server" : "connected to the name server",
                         (unsigned)net->session_port());
         } else {
@@ -1045,7 +1102,7 @@ int main(int argc, char **argv) {
                 }
                 // round 10 (task B): the console key (Backquote; not a game key) opens the console in a level / the
                 // viewer / a movie; the game's keys and buttons are let go (the level keeps running)
-                if (s_console.is_toggle(in.key_events[i].scancode, kmods) && run != RUN_FE) {
+                if (s_console.is_toggle(in.key_events[i].scancode, kmods)) {   // (the menus and the lobby too: `report`)
                     in.key_events[i].scancode = 0;
                     s_console.open();
                     release_game_input();
@@ -1106,6 +1163,7 @@ int main(int argc, char **argv) {
                 break;
             }
             case HostOp::DUMP: dump_now(s_ticks_run); break;                  // (task A) prints its own line
+            case HostOp::REPORT: write_match_report(h.sub != "clip", h.sub != "file", "console"); break;
             case HostOp::CAM:
                 if (run != RUN_LEVEL) { mclog(MCLOG_WARN, "cam: in a level only"); break; }
                 if (h.sub == "free") { debug_inspect_set_follow(false); dcam_enable(true); }
@@ -1431,6 +1489,10 @@ int main(int argc, char **argv) {
                 if (now > next_fe + 100000) next_fe = now;
                 int lvl = 0;
                 const FeResult r = fe_frame(frame(), g_timer_ticks, &lvl);
+                if (s_console.is_open()) {    // the console over the menus and the lobby (user, 2026-10-10: `report`)
+                    ui_set_target(frame());
+                    s_console.draw(virtual_h(), g_display_palette6);
+                }
                 apply_releases();
                 if (r == FE_QUIT) break;
                 if (r == FE_START_MODE || (r == FE_START_LEVEL && mode_flow_lobby_agreed())) {
@@ -1542,6 +1604,19 @@ int main(int argc, char **argv) {
             // Render-time interpolation (g_settings.interpolate): the frame between the last two ticks.
             const uint32_t alpha = pace_alpha(now, next_tick - tick_period, tick_period);
             const bool game_view = run == RUN_LEVEL || (run == RUN_DEMO && follow);
+            {   // fast-forward: the water keeps its x1 pace (its phase is the tick, so x16 made it flicker)
+                static double wave = 0;
+                static uint64_t wave_at = 0;
+                const bool fast = run == RUN_LEVEL && (s_time.fastest() || s_time.speed16() > TIME_SPEED_X1);
+                if (fast) {
+                    const uint64_t base = s_time.fastest() ? tick_period : tick_period * (uint64_t)s_time.speed16() / TIME_SPEED_X1;
+                    if (!g_wave_phase_on) wave = (double)((g_anim_tick << 6) & 0x7ff);
+                    else if (!s_time.paused() && base) wave = std::fmod(wave + (double)(now - wave_at) * 64.0 / (double)base, 2048.0);
+                    g_wave_phase = (int32_t)wave;
+                }
+                g_wave_phase_on = fast;
+                wave_at = now;
+            }
             if (g_settings.interpolate) {
                 s_interp.fill(g_render_interp, alpha, game_view);
                 if (g_render_interp.active && alpha > 0 && alpha < 0x10000) frames_lerped++;
@@ -1605,6 +1680,7 @@ int main(int argc, char **argv) {
             g_render_interp = RenderInterp{};         // render-time only: nothing else sees it
         }
         upload_palette();
+        if (s_menu.is_open()) audio_set_volumes(s_opts.sound_volume, s_opts.music_volume);    // the options' sliders, as they move
         audio_update();
         present_frame();
         maybe_screenshot(frame_no++);           // after the present: the composed output of this frame is final
@@ -1654,6 +1730,10 @@ int main(int argc, char **argv) {
             else
                 std::snprintf(title, sizeof title, "Magic Carpet (native port) - level %d  %s  cam %d,%d z=%d yaw=%d",
                               level, pace, cam.cam_x >> 8, cam.cam_y >> 8, cam.cam_z, cam.yaw);
+            if (*s_net_role) {                                   // which window is which (two on one PC)
+                const size_t len = std::strlen(title);
+                std::snprintf(title + len, sizeof title - len, "  [%s]", s_net_role);
+            }
             plat.set_title(title);
             fps_t0 = t; frames = 0;
             frame_us_sum = frame_us_max = 0;
@@ -1665,6 +1745,8 @@ int main(int argc, char **argv) {
         std::fclose(s_tick_log);
     }
     if (s_frame_log) std::fclose(s_frame_log);
+    // a match from the menus / the lobby left in the middle by quitting mcport (not the command line's `rts` runs)
+    if (s_rts && s_mode_end == MODE_END_RESULT) write_match_report(true, false, "mcport quit");
     if (s_rts) rts_end(); else dump_final(s_ticks_run);         // task A: the final dump (MC_DUMP_FINAL)
     mclog(MCLOG_INFO, "mcport: %ld ticks, %ld frames", s_ticks_run, frames_total);
     net_shutdown();

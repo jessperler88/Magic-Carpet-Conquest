@@ -124,6 +124,21 @@ static int run_player(TcpTransport *tr, int players, int ticks, const char *out)
         script_input(t, me);
         game_tick_sim();
         std::fprintf(f, "%d %08x\n", t, net_state_checksum());
+        if (const char *d = std::getenv("MC_WORLD_NET_PROJ")) {        // diagnosis: every projectile Thing of the ticks d-10 .. d
+            if (t >= std::atoi(d) - 10 && t <= std::atoi(d)) {
+                FILE *g = std::fopen((std::string(out) + ".proj").c_str(), t == std::atoi(d) - 10 ? "wb" : "ab");
+                if (g) {
+                    for (int s = 1; s < thing_pool_slots(); s++) {
+                        const Thing *p = thing_at((unsigned)s);
+                        if (p->cls != 9) continue;
+                        const int32_t head[2] = {t, s};
+                        std::fwrite(head, 1, sizeof head, g);
+                        std::fwrite(p, 1, sizeof *p, g);
+                    }
+                    std::fclose(g);
+                }
+            }
+        }
         if (const char *d = std::getenv("MC_WORLD_NET_DUMP")) {        // diagnosis: the player records after tick d
             if (std::atoi(d) == t) {
                 FILE *g = std::fopen((std::string(out) + ".rec").c_str(), "wb");

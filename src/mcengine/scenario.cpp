@@ -56,6 +56,9 @@ const CmdInfo k_cmds[] = {
     {"load", "load N", "load the state of slot N", "host"},
     {"sync", "sync", "network sync status", "host"},
     {"dump", "dump", "write a JSON dump of the game now", "host"},
+    {"report", "report [file|clip]",
+     "the Conquest match report (setup, result, players, bot behaviour, timeline, events) of the running match, or of "
+     "the last one once it is over: to <save dir>/reports and the clipboard (file / clip: only one of them)", "host"},
     {"cam", "cam free|follow [S]|to X Y|off", "debug camera: free flight, follow Thing slot S, jump to cell X,Y, back to the wizard", "host"},
     {"overlay", "overlay NAME [on|off] | overlay list", "debug overlays (grid, labels, ...)", "host"},
     {"inspect", "inspect S | inspect cursor | inspect off", "Thing inspector panel for slot S / the Thing under the pointer", "host"},
@@ -572,6 +575,12 @@ ParsedCommand cmd_parse(const std::string &line) {
     }
     if (v == "sync") return host(HostOp::SYNC);
     if (v == "dump") return host(HostOp::DUMP);
+    if (v == "report") {
+        const std::string a = word(1);
+        if (w.size() > 2 || (!a.empty() && a != "file" && a != "clip")) return fail(c, "report [file|clip]");
+        c.host.sub = a;
+        return host(HostOp::REPORT);
+    }
     if (v == "cam" || v == "camera") {
         c.verb = "cam";
         const std::string a = word(1);

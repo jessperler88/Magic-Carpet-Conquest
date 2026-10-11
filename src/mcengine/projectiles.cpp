@@ -8,6 +8,7 @@
 #include "player.h"           // player_block, player_set_combat_music_timer_40b50
 #include "mc_math.h"
 #include "mode_rules.h"         // same_side (round 12)
+#include "mode.h"
 
 uint16_t g_projectile_null_hit_index = 0;
 
@@ -162,6 +163,8 @@ void thing_turn_toward(Thing *a, Thing *b) {
 }
 
 // projectile_record_hit_stats_440a0
+AiShotStats g_ai_shot_stats[8][3][4];
+
 void projectile_record_hit_stats(Thing *t, Thing *hit, Thing *target) {
     switch (t->type) {
     case 0: case 1: case 3: case 7: case 8: case 9: case 0x13: break;
@@ -169,6 +172,17 @@ void projectile_record_hit_stats(Thing *t, Thing *hit, Thing *target) {
     default: return;
     }
     Thing *owner = thing_ref((int16_t)t->owner);
+    if (owner->cls == 3 && owner->type == 1) {
+        // port: the computer wizards' shots (g_ai_shot_stats; not game state - the original counts humans only)
+        const Thing *aim = thing_ref(owner->target);
+        const int at = aim->cls == 5 ? 0 : (aim->cls == 3 && aim->type <= 1) ? 1 : (aim->cls == 3 && aim->type == 2) ? 2 : 3;
+        AiShotStats &s = g_ai_shot_stats[player_block(owner)->player_no & 7][t->type == 0 ? 0 : t->type == 9 ? 1 : 2][at];
+        s.shots++;
+        if (thing_is_set(hit)) {
+            s.hit_any++;
+            if (thing_index(hit) == owner->target) s.hit_target++;
+        }
+    }
     if (owner->cls != 3 || owner->type != 0) return;
     player_block(owner)->shots++;
     if (!thing_is_set(hit)) return;
@@ -239,7 +253,20 @@ void projectile_type0_s0_update(Thing *t) {
         g_pos_scratch.z = (int16_t)h;
         if ((int16_t)h > t->z) {
             thing_move_to(t, &before);                          // back out of the ground
-            if (t->type == 4 || terrain_type_mask_at(thing_pos(t)) != 1) {
+            // port (mode runs): a shot aimed at a town building bursts at its middle whatever the ground there. The
+            // courtyard of the walled town castle is a water cell: the shots of a wyvern standing in it only
+            // splashed, and a building is hurt by nothing but a blast in its own cell (user, 2026-10-11).
+            const bool at_building = mode_active() && thing_is_set(target) && target->cls == 10 && target->type == 0x2d &&
+                                     pos_dist_xy(thing_pos(t), thing_pos(target)) < 0x300;
+            if (at_building) {
+                // ... and in its own cell: the blast's cell window is lopsided (thing_area_damage: the cells of
+                // x - 0x80 +- 1), so a shot coming down half a cell short on the west or north side missed it
+                Pos mid = *thing_pos(t);
+                mid.x = target->x + 0x80;
+                mid.y = target->y + 0x80;
+                thing_move_to(t, &mid);
+            }
+            if (t->type == 4 || at_building || terrain_type_mask_at(thing_pos(t)) != 1) {
                 explode = true;
             } else {
                 Thing *splash = thing_create(thing_pos(t), 10, 5);
@@ -399,8 +426,10 @@ void projectile_lightning_update(Thing *t) {
             s->cls = 9;
             s->type = 9;
             s->owner = t->owner;
-            // a segment behind `t` in the pool is updated once more in this pass: one tick more
-            s->max_health = (s >= t ? 1 : 0) - 1;
+            // a segment behind `t` in the pool is updated once more in this pass: one tick more. (By slot number:
+            // the original's pointer comparison, but the extended pool is a second block of memory whose address
+            // relative to the first differs from process to process - two network peers disagreed, 2026-10-11.)
+            s->max_health = (thing_index(s) >= thing_index(t) ? 1 : 0) - 1;
             thing_set_sprite(s, 0xd8);
             thing_link_cell(s, &seg);
             thing_restore_health(s);
@@ -566,6 +595,18 @@ void projectile_type13_s13_update(Thing *t) {
     g_pos_scratch = *thing_pos(t);
     math_rotate_offset(&g_pos_scratch, t->yaw, t->pitch, t->speed_cur);
     Thing *hit = thing_find_collision(t);          // at the position before the move
+    if (!hit && mode_active()) {
+        // port (mode runs): an arrow that passes within a step of the creature it was shot at hits it. The original
+        // tests its small box once per 1.5-cell step, so it steps over a target as small as an archer or a skeleton
+        // more often than not - the archers and skeletons shot at each other for an hour without a hit (user,
+        // 2026-10-10). Wizards and castles are big enough and keep the original test.
+        Thing *aim = thing_ref(t->target);
+        if (thing_is_set(aim) && aim->cls == 5 && aim->health >= 0 && (aim->flags & 8)) {
+            Pos mid = *thing_pos(aim);
+            mid.z = (int16_t)(mid.z + aim->ext_h / 2);
+            if (pos_dist_xyz(thing_pos(t), &mid) <= t->speed_cur) hit = aim;
+        }
+    }
     int h = terrain_height_at(&g_pos_scratch);
     if ((int16_t)h <= g_pos_scratch.z) {
         int32_t life = t->health;

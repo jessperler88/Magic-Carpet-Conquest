@@ -62,6 +62,10 @@ void level_start() {
     g_mode.ai_seed = mix(g_mode.params.seed ^ 0x5eedA1u);
     g_ai_rand_seed = g_mode.ai_seed;
     g_ai_human_wizard = 0;
+    // ... and the terrain painter's "nearly flat" result of its last cell, which the mode checksum covers too
+    // (sim_globals_get): it was whatever the previous match's last castle wall left (2026-10-11: two runs of one
+    // scripted match in a process differed in their first checksum)
+    g_terrain_nearly_flat = 0;
     // The recyclable stack's entries above its top are leftovers of the previous level (the level reset does
     // not clear them; nothing reads them, but net_state_checksum hashes the whole stack): cleared, so a mode
     // run's checksums do not depend on what the process played before.

@@ -23,3 +23,6 @@ void audio_shutdown();
 // Once per frame on the game thread: runs the music fade timers (music_fade_tick at music_fade_rate Hz)
 // for the real time elapsed since the last call.
 void audio_update();
+// The options menu's sliders, applied at once: the sample mix gain (256 = unity, default 96) and the OPL2 music's
+// output gain (256 = default). The Windows MIDI output (music = midi) has no gain here: its volume is the system's.
+void audio_set_volumes(int sound_q8, int music_q8);

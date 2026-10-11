@@ -13,10 +13,12 @@
 #include "world_set.h"
 #include "mode.h"
 #include "mode_rules.h"
+#include "mode_bots.h"
+#include "spells.h"             // spell_castle_store
 #include "gen/ai_wizard_tables.h"
 #include <cstring>
 
-uint16_t g_ai_human_wizard = 0;     // DAT_000acac0
+uint16_t g_ai_human_wizard = 0;    // DAT_000acac0
 uint32_t g_ai_rand_seed = 1;        // DAT_0009e5c8
 
 namespace {
@@ -38,6 +40,10 @@ inline uint16_t &grudge_of(PlayerBlock *P, int player) { return *(player_threat(
 inline int hostility_threshold(const Thing *other, const PlayerBlock *P) {
     return 50000 - (other->mana_total / 10 * P->ai_aggression) / 255;
 }
+
+// port (mode runs): the computer wizards raid castles beyond their sight at every skill but easy (user, 2026-10-10)
+// (ai_goal_attack_castle).
+inline bool mode_raids() { return mode_active() && mode_bot_skill(g_mode.params.match.bot_skill) >= 2; }
 
 // Thing.target / Thing.unk94 := the chosen target and its signature.
 inline void set_target(Thing *t, const Thing *target) {
@@ -324,8 +330,12 @@ int ai_cast_spell(Thing *t, int spell) {
 // wizard's position, gets flag 1 and caster = the wizard, and takes the first free book slot.
 void ai_spawn_spells(Thing *t) {
     PlayerBlock *P = player_block(t);
-    for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
-        if (w.get()->type != 0) continue;
+    // port (mode runs): the countdowns run once a tick whatever the human flyers (none alive: they stood still and a
+    // computer wizard never learnt the spell of an urn it fetched; two: they ran twice as fast)
+    int passes = mode_active() ? 1 : 0;
+    if (!passes)
+        for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) passes += w.get()->type == 0;
+    for (; passes > 0; passes--) {
         for (int s = 0; s < 24; s++) {
             if (P->spell_thing[s] != 0) continue;
             int16_t want = (int16_t)P->ai_want_spell[s];
@@ -381,6 +391,90 @@ int lightning_rung(Thing *t) {
     return ai_spell_ready(t, 0xf) ? 0xf : 0xff;
 }
 
+// Throws fireballs / meteors back at the caster (projectiles.cpp reflect): flag 0x8000, which a griffon (class 5
+// type 8) sets whenever it attacks.
+inline bool reflects(const Thing *c) { return (c->flags & 0x8000) != 0 || (c->cls == 5 && c->type == 8); }
+
+// The wizard owns the spell and its castle holds what the spell wants there (Thing.mana_cost: lightning 25000,
+// meteor 100000; spell_can_cast). Without it a cast starts, launches nothing and costs nothing - the AI never
+// tests it, so a wizard with a poor castle "attacked" with the lightning for minutes (user, 2026-10-10: the wizards
+// linger at their castles and do not kill what attacks them).
+bool castle_allows(const Thing *t, int spell) {
+    const Thing *s = ai_get_spell_thing(t, spell);
+    if (!s) return false;
+    if (s->mana_cost == 0) return true;
+    return thing_or_null(player_block(t)->castle) && s->mana_cost <= spell_castle_store(t);
+}
+
+// A builder, townie or trader (class 5 types 0xc..0xe). A wizard that hurts one is "wanted" for 200 ticks (P+0x210,
+// villager_blame): the griffons and archers in sight then attack it, and every griffon shot renews the mark - the
+// computer wizards hunted the townies next to their castles and had griffons on them all match.
+inline bool villager(const Thing *c) { return c->cls == 5 && c->type >= 0xc && c->type <= 0xe; }
+
+// A griffon is passive until it is attacked (user, 2026-10-10), so a computer wizard leaves it alone until it can
+// finish it: the lightning castable (its castle's 25000) and a mana total that pays for the bolts its health takes
+// (500 damage per 1000 mana).
+// The pack counts: every griffon in sight of the fight (32 cells) joins in against a wanted wizard, and each of
+// their shots renews the mark - six attacks on griffons in three matches killed two of them and left the attackers'
+// castles under griffons for the rest of the match (user: griffons bully the bots' castles, never mine). So the
+// wizard starts one only with six times the pack's health in mana (a third of the bolts find the target, 500 damage
+// per 1000 mana); a griffon that is already after it or its castle is fought as soon as the lightning can be cast.
+bool can_kill_reflector(const Thing *t, const Thing *c) {
+    if (!castle_allows(t, 0xf)) return false;
+    const Thing *prey = thing_or_null(c->target);
+    if (c->state == 50 && prey && prey->cls != 0 && same_side(prey->owner, t->owner)) return true;
+    int64_t health = 0;
+    for (ListWalk w(g_cfg->creature_lists[c->type < 20 ? c->type : 0]); w.ok(); w.next()) {
+        const Thing *o = w.get();
+        if (o->health > 0 && dist_sq_u(thing_pos(c), thing_pos(o)) <= (uint64_t)0x2000 * 0x2000) health += o->health;
+    }
+    return t->mana_total >= health * 6;
+}
+
+// An archer (class 5 type 4) is a guard: it only goes for wanted wizards (and skeletons), and shooting one makes
+// the wizard wanted. Left alone unless it is already after the wizard or something of its side.
+inline bool archer(const Thing *c) { return c->cls == 5 && c->type == 4; }
+
+// port (mode runs): the attack spell of a computer wizard in a mode run. The original's ladder waits for the best
+// spell it owns as soon as its mana *total* covers it - a wizard that learnt Meteor (10000) then casts nothing else
+// and one Meteor per 2000 ticks away from home, also at a griffon eating its castle. Here a big spell is waited for
+// only while the wizard holds three quarters of its price, and never spent on a creature; a creature gets the
+// lightning (an instant ray that finds it at any elevation) before the fireball. A target that throws fireballs back
+// (flag 0x8000: a griffon, a wizard under Rebound; user, 2026-10-10) gets the lightning or nothing.
+int mode_attack_spell(Thing *t, const Thing *target) {
+    const bool creature = target->cls == 5;
+    const bool bolt = castle_allows(t, 0xf);
+    if (reflects(target)) return bolt ? lightning_rung(t) : 0xff;
+    // a creature of 4000 health or more gets the Meteor too: a crab regenerates 39 a tick, more than fireballs or
+    // the lightning a wizard's mana pays for can take off it
+    static const uint8_t kBig[] = {0x11, 8, 7};
+    for (int spell : kBig) {
+        if (creature && (spell != 7 || target->health < 4000)) continue;
+        Thing *s = ai_get_spell_thing(t, spell);
+        if (!s || !castle_allows(t, spell)) continue;
+        if (ai_spell_ready(t, spell)) return spell;
+        if (player_block(t)->spell_cooldown[spell] == 0 && t->mana >= s->mana_total * 3 / 4) return 0xff;
+    }
+    if (creature && bolt && ai_spell_ready(t, 0xf)) return 0xf;
+    if (ai_get_spell_thing(t, 0) && ai_spell_ready(t, 0)) return 0;
+    return bolt ? lightning_rung(t) : 0xff;
+}
+
+// port (mode runs): nothing between the wizard and the middle of its target but air - the ground (a hill, the walls
+// of the castle the wizard sits in) swallowed most of the shots of a wizard defending its castle.
+bool line_clear(const Thing *t, const Thing *target) {
+    const int d = pos_dist_xy(thing_pos(t), thing_pos(target));
+    const int steps = d / 0x80 < 2 ? 2 : d / 0x80 > 40 ? 40 : d / 0x80;
+    const int z0 = (int16_t)t->z + t->ext_h, z1 = (int16_t)target->z + target->ext_h / 2;
+    const uint16_t yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
+    Pos p = *thing_pos(t);
+    for (int i = 1; i < steps; i++) {
+        math_rotate_offset(&p, yaw, 0, d / steps);
+        if ((int16_t)terrain_height_at(&p) > z0 + (z1 - z0) * i / steps) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 // ai_choose_attack_spell_14c70: skeleton army > volcano > [target casting rebound: accuracy chance of lightning only] > meteor >
@@ -390,9 +484,10 @@ int ai_choose_attack_spell(Thing *t) {
     PlayerBlock *P = player_block(t);
     if (P->ai_conserve != 0) return 0xff;
     int out;
+    if (mode_active()) return mode_attack_spell(t, thing_ref(t->target));      // port: mode runs
     if (attack_spell_rung(t, 0x11, &out)) return out;
     if (attack_spell_rung(t, 8, &out)) return out;
-    if (ai_spell_in_progress(thing_ref(t->target), 0xe)) {         // target casting rebound (0x14dc0: je 0x14e33 when not)
+    if (ai_spell_in_progress(thing_ref(t->target), 0xe)) {       // target casting rebound (0x14dc0: je 0x14e33 when not)
         if (ai_rand() % 255 < P->ai_accuracy) return lightning_rung(t);
     }
     if (attack_spell_rung(t, 7, &out)) return out;
@@ -406,6 +501,7 @@ int ai_choose_castle_attack_spell(Thing *t) {
     update_conserve_flag(t);
     if (player_block(t)->ai_conserve != 0) return 0xff;
     int out;
+    if (mode_active()) return mode_attack_spell(t, thing_ref(t->target));      // port: mode runs
     if (attack_spell_rung(t, 0x11, &out)) return out;
     if (attack_spell_rung(t, 8, &out)) return out;
     if (attack_spell_rung(t, 7, &out)) return out;
@@ -590,9 +686,20 @@ Thing *ai_find_mana_ball_target(Thing *t) {
     const Pos *free_origin = (mode_active() && P->castle != 0) ? castle_pos : self_pos;
     Thing *best = nullptr;
     uint64_t best_d = kFarSq;
+    // port (mode runs): no ball within 10 cells of a live kraken (it drags the wizard that comes for it under)
+    const Thing *kraken[32];
+    int krakens = 0;
+    if (mode_active())
+        for (int list = 0; list < 20; list++)
+            for (ListWalk w(g_cfg->creature_lists[list]); w.ok() && krakens < 32; w.next())
+                if (w.get()->type == 6 && w.get()->health > 0) kraken[krakens++] = w.get();
     for (ListWalk w(g_cfg->mana_ball_list); w.ok(); w.next()) {
         Thing *ball = w.get();
         Thing *owner = thing_ref(ball->mana_owner);
+        bool guarded = false;
+        for (int k = 0; k < krakens && !guarded; k++)
+            guarded = dist_sq_u(thing_pos(kraken[k]), thing_pos(ball)) < (uint64_t)0xa00 * 0xa00;
+        if (guarded) continue;
         uint64_t d;
         if (owner->cls != 3) {
             d = dist_sq_u(free_origin, thing_pos(ball));
@@ -645,7 +752,20 @@ int ai_find_castle_site(Thing *t) {
         scratch->x = seat.x;
         scratch->y = seat.y;
         Thing *c = player_find_nearest_by_type(scratch, 2);
+        // (Tried 2026-10-10 and dropped: another site while a pack sits on the seat, and keeping away while hurt
+        // without a castle - both cost more wizards than they saved. A castle is the wizard's only shelter, it is
+        // invulnerable inside, so founding the next one at once on the seat is the best it can do.)
         if (!c || pos_dist_chebyshev_xy(thing_pos(c), thing_pos(scratch)) > 0x3000) {
+            // (Tried again 2026-10-11 on 40-minute matches, where 7 of 11 eliminations on 1024 cells were a castle
+            // destroyed, founded again on the spot with the attacker still there, destroyed again and the wizard
+            // killed: founding 48 - 72 cells off instead cut the wyverns' castle levels from 167 to 32 but the
+            // crabs and krakens killed more wizards on the way - eliminations 2 / 2 / 7 -> 3 / 7 / 9. Dropped.)
+            //
+            // Second form (user, same day: further away, with the speed spell - which the flight to a site casts
+            // already): only from a crab, wyvern or dragon within 20 cells of the seat, 96 or 128 cells off, away
+            // from it, over land all the way, to land clear of castles and of such creatures. Eliminations 15 -> 23
+            // of 124, the crabs' wizard kills on 1024 cells 13 -> 32: the world's creatures get stronger with the
+            // distance from the seats (worldgen grade_cap), so a site further out is a worse place. Dropped too.
             t->home = *thing_pos(scratch);
             return 1;
         }
@@ -719,7 +839,16 @@ int ai_goal_collect_mana(Thing *t) {
 
 // ai_goal_retreat_12f70
 int ai_goal_retreat(Thing *t) {
-    if (t->max_health / 2 <= t->health) return 0;
+    if (t->max_health / 2 <= t->health) {
+        // port (mode runs): home too while a griffon is on the wizard and the lightning cannot be cast - in its
+        // castle the griffon lets go of it (mode_target_sheltered) and the wanted mark runs out
+        if (!mode_active() || castle_allows(t, 0xf)) return 0;
+        bool hunted = false;
+        const uint16_t self = thing_index(t);
+        for (ListWalk w(g_cfg->creature_lists[8]); w.ok() && !hunted; w.next())
+            hunted = w.get()->state == 50 && w.get()->target == self && w.get()->health > 0;
+        if (!hunted) return 0;
+    }
     Thing *castle = thing_or_null(player_block(t)->castle);
     if (!castle) return 0;
     set_target(t, castle);
@@ -731,11 +860,24 @@ int ai_goal_attack_castle(Thing *t) {
     if (!ai_has_any_attack_spell(t)) return 0;
     PlayerBlock *P = player_block(t);
     if (P->castle == 0 && ai_get_spell_thing(t, 0x10)) return 0;
+    // port (mode runs; user, 2026-10-10: four wizards on my castle from the second minute on, never leaving): a
+    // wizard attacks castles for a minute at most, then rests two (ModePlayer.raid_*), and one castle has one
+    // computer wizard on it at a time (two at hard / brutal).
+    if (mode_active() && g_mode.tick < g_mode.players[P->player_no & 7].raid_rest_until) return 0;
+    const int raider_cap = mode_bot_skill(g_mode.params.match.bot_skill) >= 3 ? 2 : 1;
     Thing *best = nullptr;
     uint64_t best_d = kFarSq;
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
         if (same_side(p->owner, t->owner) || p->type != 2) continue;      // port (round 12): allies' castles too
+        if (mode_active()) {
+            int raiders = 0;
+            const uint16_t pi = (uint16_t)w.idx;
+            for (ListWalk o(g_cfg->player_list); o.ok(); o.next())
+                raiders += o.get() != t && o.get()->type == 1 && o.get()->state == 1 && o.get()->target == pi &&
+                           player_block(o.get())->ai_mode == 7;
+            if (raiders >= raider_cap) continue;
+        }
         Thing *owner = thing_ref(p->owner);
         int threat = threat_of(P, player_block(owner)->player_no);
         bool candidate = false;
@@ -743,14 +885,29 @@ int ai_goal_attack_castle(Thing *t) {
             if (pos_dist_sq_xy(thing_pos(owner), thing_pos(p)) > 0x3840000 && !thing_collide(owner, p)) candidate = true;   // owner away from his castle (0x130e2..0x130ec)
         }
         if (!candidate) {
-            if ((255 - P->ai_aggression) * 0x280 + p->mana >= thing_ref(P->castle)->mana) continue;
+            // port (mode runs, not easy): a tenth of the original's lead over the other castle's mana (127
+            // aggression: 8128, not 81280 - more than most castles of a match ever hold)
+            const int lead = mode_raids() ? 0x40 : 0x280;
+            if ((255 - P->ai_aggression) * lead + p->mana >= thing_ref(P->castle)->mana) continue;
         }
         uint64_t d = dist_sq_u(thing_pos(t), thing_pos(p));
         if (d < best_d) { best = p; best_d = d; }
     }
     if (!best) return 0;
     int r = (int16_t)mc_move_desc(t->desc)->sight_radius;
-    if (pos_dist_sq_xy(thing_pos(best), thing_pos(t)) >= r * r) return 0;
+    if (pos_dist_sq_xy(thing_pos(best), thing_pos(t)) >= r * r) {
+        // port (mode runs, not easy): a raid. The original only attacks a castle it happens to see (32 cells),
+        // which on a big world is never: no computer wizard ever fought another. With a castle of level 4 or more
+        // and three quarters of its mana a wizard flies to the nearest castle it would attack on sight, and stays
+        // on it while it holds a quarter. (Harness: the castles lose levels, nobody is put out of the match by it.)
+        if (!mode_raids()) return 0;
+        const Thing *own = thing_or_null(P->castle);
+        const bool raiding = P->ai_mode == 7 && t->target == thing_index(best);
+        if (!own || own->aux + 1 < 4 || t->mana < t->mana_total / 4 * (raiding ? 1 : 3)) return 0;
+        // not further than 200 cells from home (a wizard crossed 500 for one; with 384 allowed on 1024 cells the
+        // castles of a 7-bot match held a third less mana), not with the own castle below half its health
+        if (dist_sq_u(thing_pos(own), thing_pos(best)) > (uint64_t)0xc800 * 0xc800 || own->health < own->max_health / 2) return 0;
+    }
     set_target(t, best);
     return 1;
 }
@@ -767,6 +924,11 @@ int ai_goal_attack_wizard(Thing *t) {
         if (same_side(p->owner, t->owner)) continue;                 // port (round 12): allied wizards too
         if (p->type != 0 && p->type != 1) continue;
         if (ai_spell_in_progress(p, 0xc)) continue;                 // invisible
+        // port (mode runs): not a wizard inside its own castle. It cannot be hurt there - every hit goes to the
+        // castle - so "fighting" it was a siege without the raids' limits: on hard the wizards spent 28 % of a
+        // 40-minute match at it, 92000 fireballs for no kill, and it took more castle levels than anything else
+        // (2026-10-11). Castles are attacked through ai_goal_attack_castle and its limits only.
+        if (mode_target_sheltered(p)) continue;
         PlayerBlock *Q = player_block(p);
         if (grudge_of(P, Q->player_no) == 1) {
             set_target(t, p);
@@ -848,6 +1010,11 @@ int ai_goal_hunt_creature(Thing *t) {
         for (ListWalk w(g_cfg->creature_lists[list]); w.ok(); w.next()) {
             Thing *c = w.get();
             if (same_side(c->owner, t->owner) || c->mana <= 0) continue;  // port (round 12): allies' creatures too
+            // port (mode runs): nothing that throws fireballs back without the lightning
+            if (mode_active() && ((reflects(c) && !can_kill_reflector(t, c)) || villager(c) || archer(c))) continue;
+            // port (mode runs): no kraken (9000 health, in open water, and it drags the wizard in), no wyvern without
+            // the Meteor (100000 health)
+            if (mode_active() && (c->type == 6 || (c->type == 16 && !castle_allows(t, 7)))) continue;
             uint64_t d = dist_sq_u(origin, thing_pos(c));
             if (d < best_d) { best = c; best_d = d; }
         }
@@ -859,13 +1026,18 @@ int ai_goal_hunt_creature(Thing *t) {
 
 // port (round 12, mode runs only): the nearest visible enemy wizard (2) or else live creature of another side (1)
 // within 24 cells of the own castle.
-int ai_goal_defend_castle(Thing *t) {
+static int defend_castle(Thing *t, bool farm);
+int ai_goal_defend_castle(Thing *t) { return defend_castle(t, false); }
+int ai_goal_farm_creatures(Thing *t) { return defend_castle(t, true); }
+
+static int defend_castle(Thing *t, bool farm) {
     if (!mode_active() || !ai_has_any_attack_spell(t)) return 0;
     Thing *castle = thing_or_null(player_block(t)->castle);
     if (!castle) return 0;
     constexpr uint64_t kRadiusSq = (uint64_t)0x1800 * 0x1800;
     Thing *best = nullptr;
     uint64_t best_d = kRadiusSq + 1;
+    uint64_t best_c = (uint64_t)0x2800 * 0x2800 + 1;                // the creatures' (skeletons from 40 cells)
     // an enemy wizard at the castle first (a desecration channel, mode_rules.h), then the creatures
     for (ListWalk w(g_cfg->player_list); w.ok(); w.next()) {
         Thing *p = w.get();
@@ -883,8 +1055,85 @@ int ai_goal_defend_castle(Thing *t) {
             Thing *c = w.get();
             if (c->health <= 0 || same_side(c->owner, t->owner)) continue;
             uint64_t d = dist_sq_u(thing_pos(castle), thing_pos(c));
-            if (d < best_d) { best = c; best_d = d; }
+            // (user, 2026-10-10: the wizards hardly claimed mana or grew their castles - they shot at every bee and
+            // vulture passing within 24 cells all match.) A creature after the wizard, its castle or anything of
+            // theirs counts from 24 cells, any other from 8.
+            // The others are hunted after the mana near the castle is in (ai_goal_farm_creatures): what they leave
+            // is most of a wizard's income on a big world.
+            const Thing *prey = thing_or_null(c->target);
+            // (2026-10-11: the undead that rise every five minutes march on the nearest castle and took 60 - 190
+            // castle levels in four 40-minute matches - the wizards only turned on them at the walls. A skeleton
+            // counts from 40 cells, whatever it is after.)
+            const bool undead = c->type == 9;
+            const bool hostile = undead || (prey && prey->cls != 0 && same_side(prey->owner, t->owner));
+            if (d > (undead ? (uint64_t)0x2800 * 0x2800 : kRadiusSq)) continue;
+            if (!farm && !hostile && d > (uint64_t)0x800 * 0x800) continue;
+            // a wyvern has 100000 health: without the Meteor nothing a wizard does to it counts, and it kills him
+            if (c->type == 16 && !castle_allows(t, 7)) continue;
+            if (reflects(c) && !can_kill_reflector(t, c)) continue;     // griffons are left alone until then
+            if (villager(c) || (archer(c) && !hostile)) continue;
+            if (d < best_c) { best = c; best_c = d; }
         }
+    }
+    if (!best) return 0;
+    set_target(t, best);
+    return 1;
+}
+
+// port (mode runs only): mana within 48 cells of the own castle before the raids, the urns and the far mana - the
+// balls the creatures killed at home leave lay there all match (ai_goal_collect_mana is the original's second last
+// goal).
+int ai_goal_collect_near(Thing *t) {
+    if (!mode_active()) return 0;
+    Thing *castle = thing_or_null(player_block(t)->castle);
+    if (!castle || !ai_goal_collect_mana(t)) return 0;
+    return dist_sq_u(thing_pos(castle), thing_pos(thing_ref(t->target))) <= (uint64_t)0x3000 * 0x3000 ? 1 : 0;
+}
+
+// port (mode runs only; user, 2026-10-10: the computer wizards mostly used fireball - they only ever learnt a spell
+// 200 ticks after a human took its pickup): the nearest level pickup (a spell urn, phase 2) of a spell this AI casts
+// and the wizard lacks, within 32 + 24 cells per castle level of its castle -> target (mode 4; at the urn
+// spell_dropped_update starts the wizard's own countdown, which takes it out of the search).
+int ai_goal_fetch_spell(Thing *t) {
+    if (!mode_active()) return 0;
+    PlayerBlock *P = player_block(t);
+    Thing *castle = thing_or_null(P->castle);
+    if (!castle) return 0;
+    constexpr uint32_t kCast = 1u << 1 | 1u << 4 | 1u << 7 | 1u << 8 | 1u << 0xc | 1u << 0xe | 1u << 0xf | 1u << 0x11;
+    const uint64_t radius = (uint64_t)(32 + 24 * (castle->aux + 1)) << 8;
+    Thing *best = nullptr;
+    uint64_t best_d = radius * radius + 1;
+    for (int i = 1; i < thing_pool_slots(); i++) {
+        Thing *s = thing_at((unsigned)i);
+        if (s->cls != 12 || s->type >= 24 || s->state != s->type * 3 + 2) continue;
+        if (!(kCast >> s->type & 1) || P->spell_thing[s->type] != 0 || P->ai_want_spell[s->type] != 0 ||
+            P->ai_allowed[s->type] != 1) continue;
+        uint64_t d = dist_sq_u(thing_pos(castle), thing_pos(s));
+        if (d >= radius * radius + 1) continue;
+        // the lightning first: the only answer to whatever throws fireballs back (griffons)
+        if (s->type == 0xf) d = 0;
+        if (d < best_d) { best = s; best_d = d; }
+    }
+    if (!best) return 0;
+    set_target(t, best);
+    return 1;
+}
+
+// port (mode runs only; user, 2026-10-11: can the computer wizards claim town buildings?): the nearest living town
+// building within 96 cells of the own castle that is nobody's or an enemy's -> target (mode 6: the Possession spell,
+// as for a mana ball). Its mana counts in the wizard's total and toward the big spells (spell_castle_store).
+int ai_goal_claim_town(Thing *t) {
+    if (!mode_active() || !ai_get_spell_thing(t, 3)) return 0;
+    Thing *castle = thing_or_null(player_block(t)->castle);
+    if (!castle) return 0;
+    Thing *best = nullptr;
+    uint64_t best_d = (uint64_t)0x6000 * 0x6000;
+    for (ListWalk w(g_cfg->wizard_list); w.ok(); w.next()) {
+        Thing *b = w.get();
+        if (b->state != 0x34 || b->health < 0) continue;
+        if (b->mana_owner != 0 && same_side((int)b->mana_owner, (int)(int16_t)t->owner)) continue;
+        const uint64_t d = dist_sq_u(thing_pos(castle), thing_pos(b));
+        if (d < best_d) { best = b; best_d = d; }
     }
     if (!best) return 0;
     set_target(t, best);
@@ -910,11 +1159,18 @@ int ai_choose_goal(Thing *t) {
     if (ai_goal_retreat(t)) return ai_set_mode(t, 0xb);
     int period = ai_think_period(player_block(t)->ai_reaction);
     if (period != 0 && t->tick % period != 0) return 1;              // (period 0 would divide by zero in the original)
+    // port (mode runs): an enemy wizard at the castle comes before its next level (a wizard rich enough for one went
+    // on trying to build it for 400 ticks with the enemy inside)
+    if (ai_goal_defend_castle(t) == 2) return ai_set_mode(t, 8);
     if (ai_goal_upgrade_castle(t)) return ai_set_mode(t, 1);
     if (int d = ai_goal_defend_castle(t)) return ai_set_mode(t, d == 2 ? 8 : 0xd);     // port (round 12): mode runs only
+    if (ai_goal_collect_near(t)) return ai_set_mode(t, 6);                              // port: mode runs only
     if (ai_goal_attack_castle(t)) return ai_set_mode(t, 7);
     if (ai_goal_attack_wizard(t)) return ai_set_mode(t, 8);
     if (ai_goal_attack_type3(t)) return ai_set_mode(t, 9);
+    if (int d = ai_goal_farm_creatures(t)) return ai_set_mode(t, d == 2 ? 8 : 0xd);     // port: mode runs only
+    if (ai_goal_fetch_spell(t)) return ai_set_mode(t, 4);                               // port: mode runs only
+    if (ai_goal_claim_town(t)) return ai_set_mode(t, 6);                                // port: mode runs only
     if (ai_goal_collect_mana(t)) return ai_set_mode(t, 6);
     if (ai_goal_hunt_creature(t)) return ai_set_mode(t, 0xd);
     ai_goal_default(t);
@@ -1022,7 +1278,30 @@ int ai_mode6_collect_mana(Thing *t) {
     if (!ai_approach_target(t, target, 0x400, 0xc00)) return 1;
     if (ai_cast_spell(t, 3)) {
         int a = pos_angle_to(thing_pos(t), thing_pos(target));
-        if ((uint16_t)angle_diff(t->yaw, a & 0xffff) < 0x1c) target->mana_owner = t->owner;
+        if ((uint16_t)angle_diff(t->yaw, a & 0xffff) < 0x1c && target->cls == 10 && target->type == 0x2d) {
+            // port (ai_goal_claim_town): a town building takes the claim as it takes a human's Possession shot
+            // (effect_wizard_castle_update: owner, flag and sound), then the wizard chooses again
+            target->damage_slots[1].attacker = thing_index(t);
+            ai_set_mode(t, 0);
+            return 0;
+        }
+        if ((uint16_t)angle_diff(t->yaw, a & 0xffff) < 0x1c) {
+            target->mana_owner = t->owner;
+            // port (mode runs): on to the next free ball of the cluster (within 8 cells of this one, the nearest to
+            // the wizard) at once - the original takes its next ball at its next think tick, one every 1.3 to 2.5 s
+            if (mode_active()) {
+                Thing *next = nullptr;
+                uint64_t next_d = kFarSq;
+                for (ListWalk w(g_cfg->mana_ball_list); w.ok(); w.next()) {
+                    Thing *ball = w.get();
+                    if (ball == target || thing_ref(ball->mana_owner)->cls == 3) continue;
+                    if (dist_sq_u(thing_pos(target), thing_pos(ball)) > (uint64_t)0x800 * 0x800) continue;
+                    uint64_t d = dist_sq_u(thing_pos(t), thing_pos(ball));
+                    if (d < next_d) { next = ball; next_d = d; }
+                }
+                if (next) set_target(t, next);
+            }
+        }
         if (!engine1995()) return 0;                                // 1995 (CD 0x13c57): hover after the cast too
     }
     hover_toward(t, target->z);
@@ -1033,10 +1312,32 @@ int ai_mode6_collect_mana(Thing *t) {
 int ai_mode7_attack_castle(Thing *t) {
     Thing *target = thing_ref(t->target);
     if (!ai_target_valid(t, target)) return 0;
+    if (mode_active()) {                                            // port: a minute of it, then two of rest
+        ModePlayer &mp = g_mode.players[player_block(t)->player_no & 7];
+        // ... or one castle level, whichever comes first (2026-10-11: in 40-minute matches of 7 the wizards took
+        // 236 - 350 levels off each other's castles, 12 - 13 a wizard, and spent their mana growing them back - the
+        // castles stood at the level they had after ten minutes)
+        uint8_t &was = g_mode.raid_level[player_block(t)->player_no & 7];
+        const int level = target->cls == 3 && target->type == 2 ? target->aux + 1 : 0;
+        if (mp.raid_ticks == 0) was = (uint8_t)level;
+        if (level < was) mp.raid_ticks = 60 * MODE_TICKS_PER_SECOND;
+        if (++mp.raid_ticks >= 60 * MODE_TICKS_PER_SECOND) {
+            mp.raid_ticks = 0;
+            mp.raid_rest_until = g_mode.tick + 120 * MODE_TICKS_PER_SECOND;
+            ai_set_mode(t, 0);
+            return 0;
+        }
+    }
     t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
     if (!ai_approach_target(t, target, 0x800, 0xe00)) return 1;
-    int period = ai_think_period(player_block(t)->ai_reaction);
-    if (period != 0 && t->tick % period != 0) return 1;             // not a think tick: no hover (0x129f8 jne 0x12a70)
+    if (mode_active()) {
+        // port (mode runs; user, 2026-10-10: a fireball every couple of seconds at a castle, bursts at a wizard): the
+        // bursts of ai_mode8_attack_wizard - the original casts at a castle on its think ticks only (1.3 - 2.5 s)
+        if (player_block(t)->ai_burst < 0) return 1;
+    } else {
+        int period = ai_think_period(player_block(t)->ai_reaction);
+        if (period != 0 && t->tick % period != 0) return 1;         // not a think tick: no hover (0x129f8 jne 0x12a70)
+    }
     int spell = ai_choose_castle_attack_spell(t);
     if ((int8_t)spell != -1 && ai_cast_spell(t, spell)) return 0;
     hover_toward(t, target->z);
@@ -1047,10 +1348,19 @@ int ai_mode7_attack_castle(Thing *t) {
 int ai_mode8_attack_wizard(Thing *t) {
     Thing *target = thing_ref(t->target);
     if (!ai_target_valid(t, target)) return 0;
+    if (mode_target_sheltered(target)) {                            // port: it went into its castle - choose again
+        ai_set_mode(t, 0);
+        return 0;
+    }
     t->target_yaw = (uint16_t)pos_angle_to(thing_pos(t), thing_pos(target));
     const bool e95 = engine1995();                                  // 1995 (CD 0x13e27): 0xc00 / 0x1000
     if (!ai_approach_target(t, target, e95 ? 0xc00 : 0xd00, e95 ? 0x1000 : 0x1200)) return 1;
     PlayerBlock *P = player_block(t);
+    if (mode_active() && !line_clear(t, target)) {                  // port: on toward it until nothing is in the way
+        P->target_speed = t->speed_base;
+        P->accelerating = 1;
+        return 1;
+    }
     if (P->ai_burst < 0) return 1;                                  // recovering: no hover (0x12b15 jl 0x12bc6)
     int spell = ai_choose_attack_spell(t);
     if ((int8_t)spell != -1 && ai_spell_ready(t, spell) && ai_cast_spell(t, spell)) {

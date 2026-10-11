@@ -210,6 +210,12 @@ bool audio_init(const char *game_dir) {
     return g_sound_available || g_music_available;
 }
 
+void audio_set_volumes(int sound_q8, int music_q8) {
+    if (!g_audio) return;
+    g_audio->engine.mixer().set_master(sound_q8);
+    g_audio->opl.set_gain(music_q8);
+}
+
 void audio_update() {
     if (!g_audio) return;
     auto now = std::chrono::steady_clock::now();

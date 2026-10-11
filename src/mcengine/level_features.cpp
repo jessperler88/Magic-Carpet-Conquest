@@ -9,9 +9,12 @@
 #include "settings.h"
 #include "world.h"
 #include "mode_rules.h"
+#include "mode.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 void (*g_hook_player_note_ridge_distance)(Thing *t) = nullptr;
 
@@ -44,6 +47,77 @@ bool data_ready() {
     return level_features_load_data(MC_DEFAULT_GAME_DIR);
 }
 
+// ---- port (Conquest; user, 2026-10-11): castle levels 8..11 --------------------------------------------------
+// The original's castle ends at level 7: footprints 1..7, each drawing only what its level adds (2 / 4 / 6: the
+// ground and the towers of the next ring, 3 / 5 / 7: the walls between them, with spurs to the ring inside; 0 =
+// leave the cell). Slots 8..16 of building.tab are 1 x 1 dummies nothing refers to. Levels 8..11 are two more rings
+// made from the last one: footprint 6 (towers) and 7 (walls), both 48 x 48, pulled 8 cells further out on every
+// side - 8 = 6 stretched, 9 = 7 stretched (64 x 64), 10 and 11 the same again (80 x 80). "Stretched" repeats four
+// columns (and rows) twice more in each half, in the part of the walls where the battlements repeat every four
+// cells and that no tower or spur crosses, so the corners, the gate towers and the spurs keep their shape.
+using FootGrid = std::vector<std::vector<uint8_t>>;
+std::vector<uint8_t> s_extra_maps[4];
+
+FootGrid footprint_decode(const CastleFootprint &f) {
+    FootGrid g(f.h, std::vector<uint8_t>(f.w, 0));
+    uint32_t i = 0;
+    unsigned row = 0, x = 0;
+    while (row < f.h && i < f.map_len) {
+        const int8_t c = (int8_t)f.map[i++];
+        if (c == 0) { row++; x = 0; }
+        else if (c < 0) x += (unsigned)-c;
+        else for (int n = c; n != 0 && i < f.map_len; n--, x++) { const uint8_t b = f.map[i++]; if (x < f.w) g[row][x] = b; }
+    }
+    return g;
+}
+
+// `prev` > 0 (a tower level): the cells left alone are exactly the square of the level below, centred - the rest
+// of the stretched hole becomes level ground like the other cells around the towers.
+FootGrid footprint_stretch(const FootGrid &g, int prev) {
+    const int n = (int)g.size();
+    std::vector<int> from;
+    for (int i = 0; i < n; i++) {
+        from.push_back(i);
+        if (i == 17 || i == n - 15) for (int k = 0; k < 8; k++) from.push_back(i - 3 + k % 4);
+    }
+    const int m = (int)from.size(), off = (m - prev) / 2;
+    FootGrid out((size_t)m, std::vector<uint8_t>((size_t)m, 0));
+    for (int r = 0; r < m; r++)
+        for (int c = 0; c < m; c++) {
+            uint8_t b = g[(size_t)from[(size_t)r]][(size_t)from[(size_t)c]];
+            if (prev > 0 && b == 0 && (r < off || r >= off + prev || c < off || c >= off + prev)) b = 7;
+            out[(size_t)r][(size_t)c] = b;
+        }
+    return out;
+}
+
+void footprint_install(unsigned slot, const FootGrid &g, std::vector<uint8_t> &store) {
+    store.clear();
+    for (const auto &row : g) {
+        for (size_t c = 0; c < row.size(); c += 100) {
+            const size_t len = std::min<size_t>(100, row.size() - c);
+            store.push_back((uint8_t)len);
+            store.insert(store.end(), row.begin() + (long)c, row.begin() + (long)(c + len));
+        }
+        store.push_back(0);
+    }
+    s_footprints[slot].map = store.data();
+    s_footprints[slot].map_len = (uint32_t)store.size();
+    s_footprints[slot].w = s_footprints[slot].h = (uint8_t)g.size();
+}
+
+void footprints_add_levels_8_to_11() {
+    if (s_footprints[6].w != 48 || s_footprints[6].h != 48 || s_footprints[7].w != 48 || s_footprints[7].h != 48) return;
+    const FootGrid g8 = footprint_stretch(footprint_decode(s_footprints[6]), 48);
+    const FootGrid g9 = footprint_stretch(footprint_decode(s_footprints[7]), 0);
+    const FootGrid g10 = footprint_stretch(g8, 64), g11 = footprint_stretch(g9, 0);
+    footprint_install(8, g8, s_extra_maps[0]);
+    footprint_install(9, g9, s_extra_maps[1]);
+    footprint_install(10, g10, s_extra_maps[2]);
+    footprint_install(11, g11, s_extra_maps[3]);
+    g_castle_footprints_to_11 = true;       // castle_max_level (player.h)
+}
+
 }  // namespace
 
 bool level_features_load_data(const char *game_dir) {
@@ -69,6 +143,7 @@ bool level_features_load_data(const char *game_dir) {
             s_footprints[i].w = e[4];
             s_footprints[i].h = e[5];
         }
+        footprints_add_levels_8_to_11();
     } else {
         std::fprintf(stderr, "level_features: data/building.tab / building.dat missing in %s\n", game_dir);
         if (have_dat) mc_blob_free(&dat);
@@ -530,12 +605,29 @@ void effect_castle_build_update(Thing *t) {
     }
 }
 
+// port (mode runs; always true otherwise): no more archers than two a building. Nothing thins them out in a match
+// (they only fight wanted wizards and skeletons) while every hit on a building sends one out and the buildings'
+// people grow back: 30 buildings had 313 archers after 20 minutes.
+// The same for the villagers (builders, townies, traders): four a building - see villager_room.
+static bool town_room(bool archer) {
+    int people = 0, buildings = 0;
+    for (int type = archer ? 4 : 0xc; type <= (archer ? 4 : 0xe); type++)
+        for (uint32_t i = g_cfg->creature_lists[type]; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) people++;
+    for (uint32_t i = g_cfg->wizard_list; i != 0 && i < (uint32_t)thing_pool_slots(); i = thing_at(i)->next) buildings++;
+    return people < (archer ? 2 : 4) * buildings;
+}
+static bool archer_room() { return !mode_active() || town_room(true); }
+
 // creature_spawn_random_villager_27660(thing, pos): 2/12 Archer, 2/12 Trader, 5/12 Townie, 3/12
 // Builder, each forced into its "villager" state. The constructors belong to the creature port.
 Thing *creature_spawn_random_villager(Thing *t, const Pos *pos) {
     static const uint8_t type_of[12]  = { 4, 4, 0xe, 0xe, 0xd, 0xd, 0xd, 0xd, 0xd, 0xc, 0xc, 0xc };
     static const uint8_t state_of[12] = { 0x19, 0x19, 0x55, 0x55, 0x4f, 0x4f, 0x4f, 0x4f, 0x4f, 0x49, 0x49, 0x49 };
     uint32_t r = thing_rng_next(t) % 12u;
+    if (mode_active()) {        // port: no room for this kind -> an archer / a townie instead
+        const bool archers = town_room(true);
+        if (type_of[r] == 4 ? !archers : !town_room(false)) r = type_of[r] != 4 && archers ? 0 : 4;
+    }
     Thing *c = thing_create(pos, 5, type_of[r]);
     if (c) c->state = state_of[r];
     return c;
@@ -566,7 +658,12 @@ int thing_apply_pending_damage(Thing *t) {
 // sends nobody while 999 slots or more are in use, exactly when the original's pool would have refused the
 // villager; without it the towns of level 34 grow to 8500 Things in 30000 ticks. The original pool is
 // never affected (thing_pool_slots() == 1000: no test).
+//
+// port (mode runs): four villagers (builders, townies, traders) a building instead. A generated world holds
+// thousands of Things, so the 999-slot test above never let a town send anybody out: the people a world starts with
+// walked into the buildings and the towns stood empty (user, 2026-10-11).
 static bool villager_room() {
+    if (mode_active()) return town_room(false) || town_room(true);
     if (thing_pool_slots() == MC_THING_SLOTS || !g_settings.thing_cap_villagers) return true;
     return thing_pool_slots() - 1 - thing_free_count() < MC_THING_SLOTS - 1;
 }
@@ -580,7 +677,7 @@ void effect_wizard_castle_update(Thing *t) {
         t->aux--;
         g_pos_scratch = *thing_pos(t);
         g_pos_scratch.x = g_pos_scratch.x + t->ext_x;     // the original's u16 sum (same value mod 65536)
-        Thing *c = thing_create(&g_pos_scratch, 5, 4);
+        Thing *c = archer_room() ? thing_create(&g_pos_scratch, 5, 4) : nullptr;    // port: archer_room (mode runs)
         if (c) c->state = 0x19;
         Thing *a = thing_at(thing_wrap(t->last_attacker));
         if (a->type == 0 || a->type == 1) wr16(thing_player_block(a) + 0x210, 0xc8);
@@ -598,7 +695,14 @@ void effect_wizard_castle_update(Thing *t) {
         t->damage_slots[1].amount = 0;
     }
     if (t->tick % 0x28 == 0) {
-        t->mana = (int32_t)t->aux << 8;
+        // port (mode runs): a building's people grow by one every 16 s up to its capacity. The original's only
+        // grow by villagers walking in, its levels start with full towns; a generated world's start with two people
+        // a building, so none ever filled up and sent out the builders that make a town spread (user, 2026-10-10).
+        if (mode_active() && t->aux < t->speed_base && t->tick % (0x28 * 10) == 0) t->aux++;
+        // port (mode runs): a quarter of the original's 256 mana a head. A generated world's buildings are full (the
+        // town castle held 13312), and a wizard who claimed the towns had 45 % of all mana - most of a mana win and
+        // every big spell - without collecting any (user decision, 2026-10-11: count town mana at a fraction).
+        t->mana = (int32_t)t->aux << (mode_active() ? 6 : 8);
         int16_t cap = t->speed_base;
         if (cap > 5 && cap == t->aux) {
             uint32_t roll = thing_rng_next(t) % (uint32_t)(int32_t)cap;
@@ -635,7 +739,7 @@ void effect_wizard_castle_collapse_update(Thing *t) {
             if (t->aux == 0) {
                 Thing *c = thing_create(&g_pos_scratch, 5, 0xc);
                 if (c) c->state = 0x49;
-            } else if (t->aux < 4) {
+            } else if (t->aux < 4 && archer_room()) {           // port: archer_room (mode runs; else a random villager)
                 Thing *c = thing_create(&g_pos_scratch, 5, 4);
                 if (c) c->state = 0x19;
             } else {
@@ -1142,7 +1246,12 @@ void level_spawn_effect_record(LevelData *level, ThingInit *rec) {
     ThingCreateFn fn = thing_create_fn(10, rec->model);
     if (!fn) return;
     Thing *t = fn(&g_pos_scratch);
-    if (model == 0x2d && t) effect_wizard_init(t, (rec->parent + 0x10) & 0xffff);
+    if (model == 0x2d && t) {
+        effect_wizard_init(t, (rec->parent + 0x10) & 0xffff);
+        // port (mode runs): a generated world's buildings start full, so their people come out from the first minute
+        // (two people in a castle for 52 took 13 minutes to fill up)
+        if (mode_active()) t->aux = t->speed_base;
+    }
 }
 
 // level_flag_terrain_effects_34f40

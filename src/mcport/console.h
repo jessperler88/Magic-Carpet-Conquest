@@ -78,7 +78,8 @@ public:
     void poll_stdin();
 
     // Draws the console over the target (ui_set_target done) when open; `vh` = 400 / 480.
-    void draw(int vh);
+    // menu_pal6 (the front end: the palette on screen, 256 x 6-bit RGB): a solid panel in that palette's colours.
+    void draw(int vh, const uint8_t *menu_pal6 = nullptr);
     // Messages shown in the scrollback (also mirrored to the log): mclog lines plus the console's own.
     void print(const std::string &text, int level = 2 /* MCLOG_INFO */);
 

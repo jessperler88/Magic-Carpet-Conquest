@@ -6,6 +6,8 @@
 #include <cstring>
 
 ModeState g_mode;
+bool g_castle_footprints_to_11 = false;
+int castle_max_level() { return mode_active() && g_castle_footprints_to_11 ? 11 : 7; }
 // mode_rules.h: the sides of a mode run (here because the simulation core calls same_side; mode_rules.cpp sets them)
 bool g_mode_teams = false;
 int (*g_hook_mode_side_of_owner)(int owner) = nullptr;

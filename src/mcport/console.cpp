@@ -375,16 +375,29 @@ static std::string displayable(std::string s) {
     return s;
 }
 
-void Console::draw(int vh) {
+void Console::draw(int vh, const uint8_t *menu_pal6) {
     pull_log();
     if (!open_) return;
     const UiSpriteTable *font = g_ui_font;
     ui_set_font(1);
     const int lh = ui_font_line_height() + 2;
     const int h = vh / 2;
-    ui_shade_rect(0, 0, 640, h, 0x38);
-    const uint8_t white = ui_col_white(), gold = ui_colour(15, 12, 3), warn = ui_colour(15, 6, 4), grey = ui_colour(9, 9, 10);
-    const uint8_t edge = ui_colour(9, 7, 2);
+    // Over the menus (menu_pal6: the palette on screen, 256 x 6-bit RGB) the game's shade table and colour cube do
+    // not apply: a solid panel and the nearest colours of that palette.
+    auto pick = [&](int r, int g, int b) -> uint8_t {       // 4-bit components, as ui_colour
+        if (!menu_pal6) return ui_colour(r, g, b);
+        int best = 0, best_d = 1 << 30;
+        for (int i = 0; i < 256; i++) {
+            const int dr = menu_pal6[i * 3] - r * 63 / 15, dg = menu_pal6[i * 3 + 1] - g * 63 / 15, db = menu_pal6[i * 3 + 2] - b * 63 / 15;
+            const int d = dr * dr + dg * dg + db * db;
+            if (d < best_d) { best = i; best_d = d; }
+        }
+        return (uint8_t)best;
+    };
+    if (menu_pal6) gfx_fill_rect(0, 0, 640, h, pick(1, 1, 2));
+    else ui_shade_rect(0, 0, 640, h, 0x38);
+    const uint8_t white = menu_pal6 ? pick(15, 15, 15) : ui_col_white(), gold = pick(15, 12, 3), warn = pick(15, 6, 4), grey = pick(9, 9, 10);
+    const uint8_t edge = pick(9, 7, 2);
     vga_fill_line(0, h, 640, h, edge);
     // the input line at the bottom of the panel
     const int y_in = h - lh - 2;

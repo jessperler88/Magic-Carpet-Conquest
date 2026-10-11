@@ -112,6 +112,7 @@ cell 40,52: 51 new Things`, `teleported player 0 to 15488,18048 z 256 (cell 60,7
 | `save N`, `load N` | state slot 0..9 |
 | `sync` | network sync statistics (E's `net_sync_stats`, first differing checksum part) |
 | `dump` | a JSON dump now (A's `dump_now`) |
+| `report [file\|clip]` | the Conquest match report (`mode_report.h`: setup, result, one row per wizard, what every bot spent its ticks on, a 30 s timeline, events, a census) to `<save dir>/reports/conquest_s<seed>_<size>_<bots>bots_t<tick>.txt` and the clipboard; `file` / `clip`: only one of them. A match from the menus also writes the file by itself when it ends (or mcport is quit in the middle); `report` on the result screen or later copies that one |
 | `cam free\|off`, `cam follow [#S]`, `cam to X Y` | D's debug camera (follow: the slot, else the inspected Thing) |
 | `overlay list`, `overlay NAME [on\|off]` | C's overlays (grid, labels, anchors, occupancy, damage, net, all, none) |
 | `inspect #S`, `inspect cursor`, `inspect off` | C's Thing inspector |

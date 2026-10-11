@@ -26,11 +26,12 @@
 #include <vector>
 
 // ---- host commands ------------------------------------------------------------------------------------------
-enum class HostOp { NONE, TIME, SHOT, SAVE, LOAD, SYNC, DUMP, CAM, OVERLAY, INSPECT, RUN, QUIT, ECHO };
+enum class HostOp { NONE, TIME, SHOT, SAVE, LOAD, SYNC, DUMP, CAM, OVERLAY, INSPECT, RUN, QUIT, ECHO, REPORT };
 struct HostCmd {
     HostOp      op = HostOp::NONE;
     // TIME: "pause" "resume" "toggle" "step" "speed" "normal"; CAM: "free" "follow" "to" "off";
-    // INSPECT: "slot" "cursor" "off"; OVERLAY: the overlay name ("list" = list them)
+    // INSPECT: "slot" "cursor" "off"; OVERLAY: the overlay name ("list" = list them);
+    // REPORT: "" (file + clipboard) "file" "clip"
     std::string sub;
     std::string text;   // SHOT: file name ("" = automatic); RUN: path; ECHO: text; TIME speed: "4", "1/2", "max"...
     int  n = 0;         // TIME step: ticks; SAVE / LOAD: slot; CAM follow / INSPECT slot: Thing slot (-1 = none)
